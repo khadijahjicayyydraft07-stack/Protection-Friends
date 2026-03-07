@@ -1,353 +1,610 @@
--- // Combat AI | Jujutsu Shenanigans
--- // T=Nama Target | Y=Start/Stop
+--[[
+    ╔══════════════════════════════════════════════╗
+    ║         COMBAT AI - JJS Edition              ║
+    ║  Features:                                   ║
+    ║  1. Autocomplete nama (Tab)                  ║
+    ║  2. Dash Q (kanan/kiri/depan/belakang)       ║
+    ║  3. Kamera selalu hadap musuh                ║
+    ║  4. Running speed                            ║
+    ║  5. Skill 2 setelah 3x M1                    ║
+    ║  6. Mode Passive                             ║
+    ║  7. Di-block → dash belakang musuh           ║
+    ║  8. Kadang loncat                            ║
+    ╚══════════════════════════════════════════════╝
+]]
 
-local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local PFS = game:GetService("PathfindingService")
+-- ═══════════════════════════════════════
+--              SERVICES
+-- ═══════════════════════════════════════
+local Players        = game:GetService("Players")
+local RunService     = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService   = game:GetService("TweenService")
+local HttpService    = game:GetService("HttpService")
 
-local player = Players.LocalPlayer
-local char = player.Character or player.CharacterAdded:Wait()
-local hum = char:WaitForChild("Humanoid")
-local root = char:WaitForChild("HumanoidRootPart")
-local cam = workspace.CurrentCamera
+local LocalPlayer    = Players.LocalPlayer
+local Character      = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid       = Character:WaitForChild("Humanoid")
+local HRP            = Character:WaitForChild("HumanoidRootPart")
+local Camera         = workspace.CurrentCamera
 
-player.CharacterAdded:Connect(function(c)
-	char = c
-	hum = c:WaitForChild("Humanoid")
-	root = c:WaitForChild("HumanoidRootPart")
+-- ═══════════════════════════════════════
+--              KONFIGURASI
+-- ═══════════════════════════════════════
+local CONFIG = {
+    -- Target
+    TARGET_NAME       = "",          -- Diisi via autocomplete Tab
+    
+    -- AI Mode
+    ACTIVE            = false,       -- Toggle ON/OFF
+    PASSIVE_MODE      = false,       -- Mode passive (tidak serang duluan)
+
+    -- Speed & Distance
+    RUN_SPEED         = 28,          -- Kecepatan lari ke musuh
+    ATTACK_RANGE      = 6,           -- Jarak mulai serang
+    PASSIVE_RANGE     = 20,          -- Jarak aman mode passive
+    
+    -- Combat Timing (detik)
+    M1_COOLDOWN       = 0.35,        -- Jeda antar M1
+    SKILL2_COOLDOWN   = 1.2,         -- Jeda Skill 2
+    DASH_COOLDOWN     = 0.8,         -- Jeda Dash Q
+    JUMP_CHANCE       = 0.18,        -- Probabilitas loncat (0–1)
+    JUMP_COOLDOWN     = 2.0,         -- Min jeda antar loncat
+    BEHIND_DASH_DELAY = 0.15,        -- Delay sebelum dash balik kalau di-block
+
+    -- Camera
+    CAM_LOCK          = true,        -- Lock kamera ke musuh
+    CAM_SMOOTH        = 0.12,        -- Smooth factor (0.05 = smooth, 0.3 = cepat)
+
+    -- Keybind
+    TOGGLE_KEY        = Enum.KeyCode.RightAlt,
+    DASH_KEY          = Enum.KeyCode.Q,
+    AUTOCOMPLETE_KEY  = Enum.KeyCode.Tab,
+    PASSIVE_KEY       = Enum.KeyCode.P,
+}
+
+-- ═══════════════════════════════════════
+--              STATE
+-- ═══════════════════════════════════════
+local State = {
+    target         = nil,
+    m1Count        = 0,
+    lastM1         = 0,
+    lastSkill2     = 0,
+    lastDash       = 0,
+    lastJump       = 0,
+    isBlocked      = false,
+    isDashing      = false,
+    tabIndex       = 1,
+    tabCandidates  = {},
+    partialName    = "",
+}
+
+-- ═══════════════════════════════════════
+--              UI (Simple Status HUD)
+-- ═══════════════════════════════════════
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name          = "CombatAI_HUD"
+ScreenGui.ResetOnSpawn  = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent        = LocalPlayer:WaitForChild("PlayerGui")
+
+local Frame = Instance.new("Frame")
+Frame.Size              = UDim2.new(0, 260, 0, 160)
+Frame.Position          = UDim2.new(0, 12, 0.5, -80)
+Frame.BackgroundColor3  = Color3.fromRGB(10, 10, 15)
+Frame.BackgroundTransparency = 0.25
+Frame.BorderSizePixel   = 0
+Frame.Parent            = ScreenGui
+Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
+
+local function makeLabel(yPos, size)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size               = UDim2.new(1, -16, 0, 22)
+    lbl.Position           = UDim2.new(0, 8, 0, yPos)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3         = Color3.fromRGB(220, 220, 220)
+    lbl.TextSize           = size or 14
+    lbl.Font               = Enum.Font.GothamBold
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.Parent             = Frame
+    return lbl
+end
+
+local TitleLbl  = makeLabel(6,  16)  TitleLbl.Text  = "⚔  COMBAT AI  —  JJS"
+local StatusLbl = makeLabel(30, 13)
+local TargetLbl = makeLabel(52, 13)
+local ModeLbl   = makeLabel(74, 13)
+local M1Lbl     = makeLabel(96, 13)
+local InputLbl  = makeLabel(126, 12) InputLbl.TextColor3 = Color3.fromRGB(140,200,255)
+
+local function updateHUD()
+    local active  = CONFIG.ACTIVE
+    local passive = CONFIG.PASSIVE_MODE
+
+    StatusLbl.Text  = "Status  :  " .. (active and "🟢 ON" or "🔴 OFF")
+    StatusLbl.TextColor3 = active
+        and Color3.fromRGB(100,255,130)
+        or  Color3.fromRGB(255,90,90)
+
+    TargetLbl.Text  = "Target  :  " .. (CONFIG.TARGET_NAME ~= "" and CONFIG.TARGET_NAME or "—")
+    ModeLbl.Text    = "Mode    :  " .. (passive and "🛡 Passive" or "⚔ Aggressive")
+    M1Lbl.Text      = "M1 Combo:  " .. State.m1Count .. " / 3"
+    InputLbl.Text   = "Tab=Autocomplete  |  P=Passive  |  RAlt=Toggle"
+end
+updateHUD()
+
+-- ═══════════════════════════════════════
+--         AUTOCOMPLETE (Tab)
+-- ═══════════════════════════════════════
+--[[
+  Cara pakai:
+  1. Ketik nama sebagian di kolom chat (atau gunakan nama langsung)
+  2. Tekan Tab → daftar pemain yang cocok ditampilkan
+  3. Tekan Tab lagi → siklus ke nama berikutnya
+  4. Enter / mulai combat → nama terkunci sebagai TARGET
+]]
+
+local function getPlayerCandidates(partial)
+    local results = {}
+    local lp = partial:lower()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Name:lower():sub(1, #lp) == lp then
+            table.insert(results, p.Name)
+        end
+    end
+    -- Juga coba full match di tengah
+    if #results == 0 then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Name:lower():find(lp, 1, true) then
+                table.insert(results, p.Name)
+            end
+        end
+    end
+    return results
+end
+
+local function cycleAutocomplete()
+    -- Ambil partial dari nama yang sudah diset (atau kosong)
+    local partial = State.partialName
+
+    if #State.tabCandidates == 0 or State.partialName == "" then
+        -- Refresh kandidat
+        State.tabCandidates = getPlayerCandidates(partial)
+        State.tabIndex = 1
+    else
+        State.tabIndex = (State.tabIndex % #State.tabCandidates) + 1
+    end
+
+    if #State.tabCandidates > 0 then
+        local chosen = State.tabCandidates[State.tabIndex]
+        CONFIG.TARGET_NAME = chosen
+        -- Cari character-nya langsung
+        local p = Players:FindFirstChild(chosen)
+        if p and p.Character then
+            State.target = p.Character
+        end
+        updateHUD()
+        -- Tampilkan kandidat di label input sebentar
+        local list = table.concat(State.tabCandidates, "  |  ")
+        InputLbl.Text = "[ " .. list .. " ]"
+        task.delay(3, function()
+            InputLbl.Text = "Tab=Autocomplete  |  P=Passive  |  RAlt=Toggle"
+        end)
+    else
+        InputLbl.Text = "❌ Tidak ada pemain ditemukan"
+        task.delay(2, function()
+            InputLbl.Text = "Tab=Autocomplete  |  P=Passive  |  RAlt=Toggle"
+        end)
+    end
+end
+
+-- Saat pemain baru join, reset kandidat supaya fresh
+Players.PlayerAdded:Connect(function()
+    State.tabCandidates = {}
+end)
+Players.PlayerRemoving:Connect(function(p)
+    if CONFIG.TARGET_NAME == p.Name then
+        CONFIG.TARGET_NAME = ""
+        State.target = nil
+        State.tabCandidates = {}
+        updateHUD()
+    end
 end)
 
--- GUI
-local pg = player:WaitForChild("PlayerGui")
-if pg:FindFirstChild("CombatGUI") then pg:FindFirstChild("CombatGUI"):Destroy() end
-local gui = Instance.new("ScreenGui")
-gui.Name = "CombatGUI"
-gui.ResetOnSpawn = false
-gui.Parent = pg
-
-local ind = Instance.new("TextLabel", gui)
-ind.Size = UDim2.new(0, 220, 0, 30)
-ind.Position = UDim2.new(0, 10, 1, -42)
-ind.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
-ind.BorderSizePixel = 0
-ind.Text = "⚔️ COMBAT: OFF"
-ind.TextColor3 = Color3.fromRGB(160, 160, 160)
-ind.TextScaled = true
-ind.Font = Enum.Font.GothamBold
-Instance.new("UICorner", ind).CornerRadius = UDim.new(0, 7)
-
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 300, 0, 90)
-frame.Position = UDim2.new(0.5, -150, 1, -110)
-frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
-frame.BorderSizePixel = 0
-frame.Visible = false
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-Instance.new("UIStroke", frame).Color = Color3.fromRGB(255, 60, 60)
-
-local tlabel = Instance.new("TextLabel", frame)
-tlabel.Size = UDim2.new(1, 0, 0, 25)
-tlabel.BackgroundTransparency = 1
-tlabel.Text = "⚔️ Ketik nama musuh"
-tlabel.TextColor3 = Color3.fromRGB(255, 60, 60)
-tlabel.TextScaled = true
-tlabel.Font = Enum.Font.GothamBold
-
-local tinput = Instance.new("TextBox", frame)
-tinput.Size = UDim2.new(1, -20, 0, 32)
-tinput.Position = UDim2.new(0, 10, 0, 28)
-tinput.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-tinput.BorderSizePixel = 0
-tinput.Text = ""
-tinput.PlaceholderText = "Nama player / NPC..."
-tinput.PlaceholderColor3 = Color3.fromRGB(90, 90, 90)
-tinput.TextColor3 = Color3.fromRGB(255, 255, 255)
-tinput.TextScaled = true
-tinput.Font = Enum.Font.Gotham
-tinput.ClearTextOnFocus = false
-Instance.new("UICorner", tinput).CornerRadius = UDim.new(0, 6)
-
-local tstatus = Instance.new("TextLabel", frame)
-tstatus.Size = UDim2.new(1, -20, 0, 22)
-tstatus.Position = UDim2.new(0, 10, 0, 63)
-tstatus.BackgroundTransparency = 1
-tstatus.Text = ""
-tstatus.TextColor3 = Color3.fromRGB(200, 200, 200)
-tstatus.TextScaled = true
-tstatus.Font = Enum.Font.Gotham
-tstatus.TextXAlignment = Enum.TextXAlignment.Left
-
--- STATE
-local running = false
-local loopThread = nil
-local targetChar = nil
-local targetName = ""
-local lastHP = 100
-local blocking = false
-
-local function stop()
-	running = false
-	if loopThread then task.cancel(loopThread) loopThread = nil end
-	hum.WalkSpeed = 16
-	ind.Text = "⚔️ COMBAT: OFF"
-	ind.TextColor3 = Color3.fromRGB(160, 160, 160)
-	frame.Visible = false
+-- ═══════════════════════════════════════
+--         UTILITY FUNCTIONS
+-- ═══════════════════════════════════════
+local function getTarget()
+    if State.target and State.target.Parent then
+        local h = State.target:FindFirstChildOfClass("Humanoid")
+        if h and h.Health > 0 then
+            return State.target
+        end
+    end
+    -- Auto-cari ulang dari nama
+    if CONFIG.TARGET_NAME ~= "" then
+        local p = Players:FindFirstChild(CONFIG.TARGET_NAME)
+        if p and p.Character then
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                State.target = p.Character
+                return State.target
+            end
+        end
+    end
+    return nil
 end
 
--- AUTO AIM KAMERA
-local function aimAt(targetRoot)
-	if not targetRoot then return end
-	local dir = (targetRoot.Position - cam.CFrame.Position).Unit
-	cam.CFrame = CFrame.new(cam.CFrame.Position, cam.CFrame.Position + dir)
+local function getTargetHRP(tgt)
+    return tgt and tgt:FindFirstChild("HumanoidRootPart")
 end
 
--- AUTO M1
-local function doM1()
-	-- Simulate left click
-	local ms = player:GetMouse()
-	fireclickdetector = fireclickdetector or function() end
-	-- Pakai mouse button down event
-	mouse1click = mouse1click or function() end
-	pcall(function()
-		mouse1press()
-		task.wait(0.1)
-		mouse1release()
-	end)
+local function distanceTo(targetHRP)
+    if not targetHRP then return math.huge end
+    return (HRP.Position - targetHRP.Position).Magnitude
 end
 
--- AUTO BLOCK
-local function doBlock(state)
-	blocking = state
-	pcall(function()
-		if state then
-			keypress(0x46) -- F key
-		else
-			keyrelease(0x46)
-		end
-	end)
+local function now()
+    return tick()
 end
 
--- AUTO DASH
-local dashCooldown = false
-local function doDash(dir)
-	if dashCooldown then return end
-	dashCooldown = true
-	local dashKeys = {
-		front = 0x57,  -- W
-		back = 0x53,   -- S
-		left = 0x41,   -- A
-		right = 0x44,  -- D
-	}
-	local key = dashKeys[dir]
-	if key then
-		pcall(function()
-			keypress(key)
-			task.wait(0.05)
-			keypress(key) -- double tap = dash
-			task.wait(0.1)
-			keyrelease(key)
-		end)
-	end
-	task.delay(0.8, function() dashCooldown = false end)
+-- ═══════════════════════════════════════
+--         DASH Q  (kanan/kiri/depan/belakang)
+-- ═══════════════════════════════════════
+local function performDash(direction)
+    -- direction: "right" | "left" | "forward" | "backward"
+    if State.isDashing then return end
+    if (now() - State.lastDash) < CONFIG.DASH_COOLDOWN then return end
+
+    State.isDashing = true
+    State.lastDash = now()
+
+    local cf    = HRP.CFrame
+    local dirs  = {
+        forward  =  cf.LookVector,
+        backward = -cf.LookVector,
+        right    =  cf.RightVector,
+        left     = -cf.RightVector,
+    }
+    local vec = dirs[direction] or dirs["forward"]
+    local goal = HRP.Position + vec * 22 + Vector3.new(0, 0.5, 0)
+
+    -- Simpan & naikkan speed
+    local prevSpeed = Humanoid.WalkSpeed
+    Humanoid.WalkSpeed = 0
+
+    -- Tween HRP
+    local tween = TweenService:Create(HRP, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        CFrame = CFrame.new(goal, goal + cf.LookVector)
+    })
+    tween:Play()
+    tween.Completed:Wait()
+
+    Humanoid.WalkSpeed = prevSpeed
+    State.isDashing = false
 end
 
--- DETEKSI MUSUH ATTACK (HP turun)
-local function detectIncoming()
-	local currentHP = hum and hum.Health or 100
-	if currentHP < lastHP - 1 then
-		lastHP = currentHP
-		return true
-	end
-	lastHP = currentHP
-	return false
+-- ═══════════════════════════════════════
+--         DASH BELAKANG MUSUH (saat di-block)
+-- ═══════════════════════════════════════
+local function dashBehindEnemy(tgtHRP)
+    if not tgtHRP then return end
+    if State.isDashing then return end
+    if (now() - State.lastDash) < CONFIG.DASH_COOLDOWN then return end
+
+    State.isDashing = true
+    State.lastDash = now()
+
+    local enemyBack  = tgtHRP.CFrame * CFrame.new(0, 0, 3.5)  -- tepat di belakang musuh
+    local lookDir    = tgtHRP.CFrame.LookVector
+
+    local prevSpeed = Humanoid.WalkSpeed
+    Humanoid.WalkSpeed = 0
+
+    local tween = TweenService:Create(HRP, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        CFrame = CFrame.new(enemyBack.Position, enemyBack.Position + lookDir)
+    })
+    tween:Play()
+    tween.Completed:Wait()
+
+    Humanoid.WalkSpeed = prevSpeed
+    State.isDashing = false
 end
 
--- PATHFIND
-local function getPath(dest)
-	local path = PFS:CreatePath({
-		AgentRadius = 1,
-		AgentHeight = 5,
-		AgentCanJump = true,
-		AgentCanClimb = true,
-		WaypointSpacing = 1.5,
-	})
-	local ok = pcall(function() path:ComputeAsync(root.Position, dest) end)
-	if ok and path.Status == Enum.PathStatus.Success then
-		return path:GetWaypoints()
-	end
-	return nil
+-- ═══════════════════════════════════════
+--         SIMULATE INPUT (M1 / Skill)
+-- ═══════════════════════════════════════
+-- Roblox tidak bisa VirtualInputManager di kebanyakan exploit,
+-- tapi di executor (mis. Synapse/KRNL) gunakan:
+
+local VIM = game:GetService("VirtualInputManager") -- Untuk executor
+-- Fallback: fireproximityprompt / remote jika game pakai custom combat
+
+local function simulateClick()
+    -- M1 / klik kiri
+    pcall(function()
+        VIM:SendMouseButtonEvent(0, 0, 0, true,  game, 1)  -- down
+        task.wait(0.05)
+        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 1)  -- up
+    end)
 end
 
--- CARI TARGET
-local function findTarget(name)
-	name = name:lower()
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Name:lower():find(name) and p ~= player then
-			local c = p.Character
-			if c and c:FindFirstChild("HumanoidRootPart") then
-				return p.Name, c
-			end
-		end
-	end
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("Model") and obj.Name:lower():find(name) and obj ~= char then
-			if obj:FindFirstChild("HumanoidRootPart") and obj:FindFirstChildOfClass("Humanoid") then
-				return obj.Name, obj
-			end
-		end
-	end
-	return nil, nil
+local function simulateKey(keyCode)
+    pcall(function()
+        VIM:SendKeyEvent(true,  keyCode, false, game)
+        task.wait(0.05)
+        VIM:SendKeyEvent(false, keyCode, false, game)
+    end)
 end
 
--- MAIN COMBAT LOOP
-local function startCombat()
-	if not targetChar then return end
-	running = true
-	hum.WalkSpeed = 24
-	ind.Text = "⚔️ " .. targetName
-	ind.TextColor3 = Color3.fromRGB(255, 60, 60)
+-- ═══════════════════════════════════════
+--         KAMERA LOCK KE MUSUH
+-- ═══════════════════════════════════════
+local camConnection
+local function startCameraLock()
+    if camConnection then camConnection:Disconnect() end
+    camConnection = RunService.RenderStepped:Connect(function()
+        if not CONFIG.CAM_LOCK or not CONFIG.ACTIVE then return end
+        local tgt = getTarget()
+        local tgtHRP = getTargetHRP(tgt)
+        if not tgtHRP then return end
 
-	local wps, wi = nil, 1
-	local lastDest = Vector3.zero
-	local recompTimer = 0
-	local stuckPos = root.Position
-	local stuckT = 0
-	local m1Timer = 0
-	local dashTimer = 0
+        -- Posisi kamera: agak di belakang & atas player
+        local camPos   = HRP.Position + Vector3.new(0, 4, 0) - HRP.CFrame.LookVector * 10
+        local aimPoint = tgtHRP.Position + Vector3.new(0, 2, 0)
 
-	loopThread = task.spawn(function()
-		while running do
-			local hrp = targetChar:FindFirstChild("HumanoidRootPart")
-			local th = targetChar:FindFirstChildOfClass("Humanoid")
-			if not hrp or not targetChar.Parent or (th and th.Health <= 0) then
-				tstatus.Text = "☠️ " .. targetName .. " mati!"
-				tstatus.TextColor3 = Color3.fromRGB(100, 255, 180)
-				stop() break
-			end
-
-			local dest = hrp.Position
-			local myXZ = Vector2.new(root.Position.X, root.Position.Z)
-			local dXZ = Vector2.new(dest.X, dest.Z)
-			local dist = (myXZ - dXZ).Magnitude
-
-			-- ✅ AUTO AIM KAMERA ke musuh
-			aimAt(hrp)
-
-			-- Update status
-			tstatus.Text = "⚔️ " .. targetName .. " | " .. math.floor(dist) .. " stud"
-			tstatus.TextColor3 = Color3.fromRGB(255, 150, 0)
-
-			-- ✅ AUTO BLOCK kalau kena hit
-			if detectIncoming() then
-				tstatus.Text = "🛡️ BLOCKING!"
-				tstatus.TextColor3 = Color3.fromRGB(0, 200, 255)
-				doBlock(true)
-				-- Random dash buat dodge
-				local dirs = {"left", "right", "back"}
-				doDash(dirs[math.random(1, #dirs)])
-				task.wait(0.4)
-				doBlock(false)
-			end
-
-			-- ✅ AUTO M1 kalau deket
-			m1Timer -= 0.05
-			if dist < 6 and m1Timer <= 0 then
-				m1Timer = 0.35 -- attack tiap 0.35 detik
-				tstatus.Text = "👊 M1! " .. targetName
-				tstatus.TextColor3 = Color3.fromRGB(255, 60, 60)
-				doM1()
-			end
-
-			-- ✅ AUTO DASH ke depan kalau jauh
-			dashTimer -= 0.05
-			if dist > 15 and dashTimer <= 0 then
-				dashTimer = 2
-				doDash("front")
-			end
-
-			-- PATHFIND
-			if dist > 5 then
-				recompTimer -= 0.05
-				local destMoved = (dest - lastDest).Magnitude
-				if destMoved > 4 or wps == nil or recompTimer <= 0 then
-					lastDest = dest
-					recompTimer = 1.5
-					local newWps = getPath(dest)
-					if newWps and #newWps > 1 then
-						wps = newWps
-						wi = 2
-					end
-				end
-
-				if wps and wi <= #wps then
-					local wpXZ = Vector2.new(wps[wi].Position.X, wps[wi].Position.Z)
-					if (myXZ - wpXZ).Magnitude < 3 then wi += 1 end
-				end
-
-				local target = dest
-				if wps and wi <= #wps then
-					local aw = wps[wi]
-					if aw.Position.Y - root.Position.Y > 0.7 then hum.Jump = true end
-					if aw.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
-					target = aw.Position
-				end
-				hum:MoveTo(target)
-
-				if (root.Position - stuckPos).Magnitude < 0.5 then
-					stuckT += 0.05
-					if stuckT > 1.5 then hum.Jump = true wps = nil stuckT = 0 end
-				else stuckT = 0 stuckPos = root.Position end
-			else
-				-- Deket → hadap musuh terus
-				root.CFrame = CFrame.new(root.Position, Vector3.new(hrp.Position.X, root.Position.Y, hrp.Position.Z))
-			end
-
-			task.wait(0.05)
-		end
-	end)
+        Camera.CameraType = Enum.CameraType.Scriptable
+        Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(camPos, aimPoint), CONFIG.CAM_SMOOTH)
+    end)
 end
 
--- TOMBOL
-UIS.InputBegan:Connect(function(key, gp)
-	if gp then return end
-	if key.KeyCode == Enum.KeyCode.T then
-		stop()
-		frame.Visible = not frame.Visible
-		if frame.Visible then
-			tinput.Text = ""
-			tinput:CaptureFocus()
-			tstatus.Text = "Ketik nama musuh lalu Enter"
-			tstatus.TextColor3 = Color3.fromRGB(160, 160, 160)
-		end
-	elseif key.KeyCode == Enum.KeyCode.Y then
-		if running then stop()
-		else
-			if targetChar then startCombat()
-			else
-				frame.Visible = true
-				tstatus.Text = "⚠️ Tulis nama dulu! (T)"
-				tstatus.TextColor3 = Color3.fromRGB(255, 200, 0)
-			end
-		end
-	end
+local function stopCameraLock()
+    if camConnection then
+        camConnection:Disconnect()
+        camConnection = nil
+    end
+    Camera.CameraType = Enum.CameraType.Custom
+end
+
+-- ═══════════════════════════════════════
+--         RUNNING SPEED
+-- ═══════════════════════════════════════
+local function setRunSpeed(active)
+    if active then
+        Humanoid.WalkSpeed = CONFIG.RUN_SPEED
+    else
+        Humanoid.WalkSpeed = 16  -- default Roblox
+    end
+end
+
+-- ═══════════════════════════════════════
+--         DETEKSI BLOCK (sederhana)
+-- ═══════════════════════════════════════
+-- Logika: jika M1 tidak mengurangi HP musuh dalam window tertentu,
+-- diasumsikan di-block. Bisa dimodif sesuai game.
+local function checkBlocked(tgtChar)
+    if not tgtChar then return false end
+    local h = tgtChar:FindFirstChildOfClass("Humanoid")
+    if not h then return false end
+    -- Simpan HP sebelum M1, cek setelah 0.3 detik
+    -- Diimplementasikan di loop utama via State.isBlocked
+    return State.isBlocked
+end
+
+-- ═══════════════════════════════════════
+--         COMBAT LOOP UTAMA
+-- ═══════════════════════════════════════
+local lastHPCheck    = 0
+local lastTargetHP   = math.huge
+local combatRunning  = false
+
+local function combatLoop()
+    if combatRunning then return end
+    combatRunning = true
+
+    RunService.Heartbeat:Connect(function(dt)
+        if not CONFIG.ACTIVE then
+            setRunSpeed(false)
+            return
+        end
+
+        local tgt    = getTarget()
+        local tgtHRP = getTargetHRP(tgt)
+
+        if not tgt or not tgtHRP then
+            Humanoid.WalkSpeed = 16
+            return
+        end
+
+        local dist = distanceTo(tgtHRP)
+
+        -- ─── MODE PASSIVE ───────────────────────────────
+        if CONFIG.PASSIVE_MODE then
+            -- Jaga jarak aman, tidak serang duluan
+            if dist < CONFIG.PASSIVE_RANGE then
+                -- Mundur menjauhi musuh
+                local awayDir = (HRP.Position - tgtHRP.Position).Unit
+                Humanoid:MoveTo(HRP.Position + awayDir * 6)
+            end
+            -- Kamera tetap lock
+            return
+        end
+
+        -- ─── RUNNING SPEED ke musuh ─────────────────────
+        setRunSpeed(true)
+
+        -- ─── FACING musuh ───────────────────────────────
+        if dist > CONFIG.ATTACK_RANGE then
+            Humanoid:MoveTo(tgtHRP.Position)
+        else
+            -- Berhenti & hadap musuh
+            Humanoid.WalkSpeed = 0
+            HRP.CFrame = HRP.CFrame:Lerp(
+                CFrame.new(HRP.Position, Vector3.new(tgtHRP.Position.X, HRP.Position.Y, tgtHRP.Position.Z)),
+                0.25
+            )
+            Humanoid.WalkSpeed = CONFIG.RUN_SPEED
+        end
+
+        -- ─── BLOCK DETECTION ─────────────────────────────
+        local t = now()
+        if (t - lastHPCheck) > 0.4 then
+            local tgtH = tgt:FindFirstChildOfClass("Humanoid")
+            if tgtH then
+                if tgtH.Health >= lastTargetHP and State.m1Count > 0 then
+                    State.isBlocked = true
+                else
+                    State.isBlocked = false
+                end
+                lastTargetHP = tgtH.Health
+            end
+            lastHPCheck = t
+        end
+
+        -- ─── KALAU DI-BLOCK → DASH BELAKANG ─────────────
+        if State.isBlocked then
+            task.delay(CONFIG.BEHIND_DASH_DELAY, function()
+                dashBehindEnemy(tgtHRP)
+                State.isBlocked = false
+                State.m1Count = 0
+            end)
+            return
+        end
+
+        -- ─── COMBAT di range serang ──────────────────────
+        if dist <= CONFIG.ATTACK_RANGE then
+
+            -- Skill 2 setelah 3x M1
+            if State.m1Count >= 3 then
+                if (t - State.lastSkill2) >= CONFIG.SKILL2_COOLDOWN then
+                    -- Tekan E (sesuaikan keyCode ke game)
+                    simulateKey(Enum.KeyCode.E)
+                    State.lastSkill2 = t
+                    State.m1Count = 0
+                    task.wait(0.4)
+                end
+                return
+            end
+
+            -- M1 attack
+            if (t - State.lastM1) >= CONFIG.M1_COOLDOWN then
+                simulateClick()
+                State.m1Count = State.m1Count + 1
+                State.lastM1 = t
+            end
+
+            -- Loncat kadang-kadang
+            if (t - State.lastJump) >= CONFIG.JUMP_COOLDOWN then
+                if math.random() < CONFIG.JUMP_CHANCE then
+                    Humanoid.Jump = true
+                    State.lastJump = t
+                end
+            end
+        end
+
+        updateHUD()
+    end)
+end
+
+-- ═══════════════════════════════════════
+--         INPUT HANDLING
+-- ═══════════════════════════════════════
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    -- Toggle AI ON/OFF
+    if input.KeyCode == CONFIG.TOGGLE_KEY then
+        CONFIG.ACTIVE = not CONFIG.ACTIVE
+        if CONFIG.ACTIVE then
+            setRunSpeed(true)
+            startCameraLock()
+            combatLoop()
+        else
+            setRunSpeed(false)
+            stopCameraLock()
+        end
+        updateHUD()
+        return
+    end
+
+    -- Toggle Passive Mode
+    if input.KeyCode == CONFIG.PASSIVE_KEY then
+        CONFIG.PASSIVE_MODE = not CONFIG.PASSIVE_MODE
+        updateHUD()
+        return
+    end
+
+    -- Autocomplete Tab
+    if input.KeyCode == CONFIG.AUTOCOMPLETE_KEY then
+        -- Baca partial dari chat jika bisa, atau kosong = list semua
+        -- Jika ingin dari chat: ambil dari TextBox fokus
+        local focused = UserInputService:GetFocusedTextBox()
+        if focused then
+            State.partialName = focused.Text or ""
+        else
+            State.partialName = ""
+        end
+        State.tabCandidates = getPlayerCandidates(State.partialName)
+        State.tabIndex = 0
+        cycleAutocomplete()
+        return
+    end
+
+    -- Skip jika game sedang proses input (chat dll)
+    if gameProcessed then return end
+
+    -- Dash Q
+    if input.KeyCode == CONFIG.DASH_KEY then
+        -- Deteksi arah via WASD
+        local moveVec = Humanoid.MoveDirection
+
+        -- Tentukan arah terkuat
+        local cf = HRP.CFrame
+        local fwd   = cf.LookVector
+        local rgt   = cf.RightVector
+
+        local fDot  = moveVec:Dot(fwd)
+        local rDot  = moveVec:Dot(rgt)
+
+        local dashDir
+        if math.abs(fDot) >= math.abs(rDot) then
+            dashDir = fDot >= 0 and "forward" or "backward"
+        else
+            dashDir = rDot >= 0 and "right" or "left"
+        end
+
+        -- Default: kalau diam, dash forward
+        if moveVec.Magnitude < 0.1 then dashDir = "forward" end
+
+        performDash(dashDir)
+        return
+    end
 end)
 
-tinput.FocusLost:Connect(function(enter)
-	if not enter then return end
-	local name = tinput.Text:match("^%s*(.-)%s*$")
-	if name == "" then return end
-	local found, foundChar = findTarget(name)
-	if found then
-		targetName = found
-		targetChar = foundChar
-		tstatus.Text = "✅ Target: " .. found .. " | Y = Serang!"
-		tstatus.TextColor3 = Color3.fromRGB(0, 220, 100)
-	else
-		tstatus.Text = "❌ '" .. name .. "' gak ada!"
-		tstatus.TextColor3 = Color3.fromRGB(255, 80, 80)
-		targetChar = nil
-	end
+-- ═══════════════════════════════════════
+--         CHARACTER RESPAWN HANDLER
+-- ═══════════════════════════════════════
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    HRP      = char:WaitForChild("HumanoidRootPart")
+    State.m1Count   = 0
+    State.isBlocked = false
+    State.isDashing = false
+    if CONFIG.ACTIVE then
+        startCameraLock()
+        combatLoop()
+    end
+    updateHUD()
 end)
 
-print("[Combat AI] ✅ T=Nama | Y=Start/Stop | Auto M1+Block+Dash+Aim")
+-- ═══════════════════════════════════════
+--         INIT
+-- ═══════════════════════════════════════
+print("╔══════════════════════════════════╗")
+print("║  Combat AI JJS — Loaded!         ║")
+print("║  RightAlt  = Toggle ON/OFF        ║")
+print("║  Tab       = Autocomplete target  ║")
+print("║  Q         = Dash (WASD arah)     ║")
+print("║  P         = Toggle Passive Mode  ║")
+print("╚══════════════════════════════════╝")
+updateHUD()
