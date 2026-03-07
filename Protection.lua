@@ -444,4 +444,38 @@ tinput.FocusLost:Connect(function(enter)
 	end
 end)
 
+-- // JJS Remote Scanner
+-- // Jalanin dulu buat liat nama Remote Events nya!
+
+local RS = game:GetService("ReplicatedStorage")
+local player = game.Players.LocalPlayer
+
+print("========== REMOTE EVENTS ==========")
+for _, obj in ipairs(RS:GetDescendants()) do
+	if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+		print(obj.ClassName .. " | " .. obj:GetFullName())
+	end
+end
+
+print("========== BINDABLE EVENTS ==========")
+for _, obj in ipairs(RS:GetDescendants()) do
+	if obj:IsA("BindableEvent") or obj:IsA("BindableFunction") then
+		print(obj.ClassName .. " | " .. obj:GetFullName())
+	end
+end
+
+print("========== PLAYER REMOTES ==========")
+local char = player.Character
+if char then
+	for _, obj in ipairs(char:GetDescendants()) do
+		if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+			print(obj.ClassName .. " | " .. obj:GetFullName())
+		end
+	end
+end
+
+print("===================================")
+print("Copy semua hasil ini dan kasih ke gua!")
+
+
 print("[Combat AI v2] T=Nama | Y=Fight | P=Passive | Tab=Autocomplete")
