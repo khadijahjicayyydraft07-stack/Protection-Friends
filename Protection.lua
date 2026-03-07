@@ -444,36 +444,45 @@ tinput.FocusLost:Connect(function(enter)
 	end
 end)
 
--- // JJS Remote Scanner
--- // Jalanin dulu buat liat nama Remote Events nya!
+-- // JJS Argument Hook
+-- // Coba M1, Dash, Skill sekali lalu lihat output nya!
 
 local RS = game:GetService("ReplicatedStorage")
-local player = game.Players.LocalPlayer
+local Knit = RS.Knit.Knit.Services
 
-print("========== REMOTE EVENTS ==========")
-for _, obj in ipairs(RS:GetDescendants()) do
-	if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-		print(obj.ClassName .. " | " .. obj:GetFullName())
-	end
+-- Hook M1
+local M1 = Knit.ItemService.RE.M1
+local oldM1 = M1.FireServer
+M1.FireServer = function(self, ...)
+	print("[M1 ARGS]", ...)
+	return oldM1(self, ...)
 end
 
-print("========== BINDABLE EVENTS ==========")
-for _, obj in ipairs(RS:GetDescendants()) do
-	if obj:IsA("BindableEvent") or obj:IsA("BindableFunction") then
-		print(obj.ClassName .. " | " .. obj:GetFullName())
-	end
+-- Hook Dash
+local Dash = Knit.MovementService.RE.Dash
+local oldDash = Dash.FireServer
+Dash.FireServer = function(self, ...)
+	print("[DASH ARGS]", ...)
+	return oldDash(self, ...)
 end
 
-print("========== PLAYER REMOTES ==========")
-local char = player.Character
-if char then
-	for _, obj in ipairs(char:GetDescendants()) do
-		if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-			print(obj.ClassName .. " | " .. obj:GetFullName())
-		end
-	end
+-- Hook Skill (Activated)
+local Skill = Knit.CharaService.RE.Activated
+local oldSkill = Skill.FireServer
+Skill.FireServer = function(self, ...)
+	print("[SKILL ARGS]", ...)
+	return oldSkill(self, ...)
 end
 
+-- Hook Block
+local Block = Knit.BlockService.RE.Deactivated
+local oldBlock = Block.FireServer
+Block.FireServer = function(self, ...)
+	print("[BLOCK ARGS]", ...)
+	return oldBlock(self, ...)
+end
+
+print("[Hook] Aktif! Sekarang: M1, Dash, Skill, Block sekali lalu lihat output!")
 print("===================================")
 print("Copy semua hasil ini dan kasih ke gua!")
 
