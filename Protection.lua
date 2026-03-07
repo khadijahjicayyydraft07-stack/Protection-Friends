@@ -178,7 +178,7 @@ end
 -- ============================================================
 UIS.InputBegan:Connect(function(key, gp)
 	if gp then return end
-	if key.KeyCode == Enum.KeyCode.B then
+	if key.KeyCode == Enum.KeyCode.T then
 		if active then stopAutoBlock() else startAutoBlock() end
 	end
 end)
