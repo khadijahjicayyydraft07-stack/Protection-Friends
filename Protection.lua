@@ -72,12 +72,16 @@ local m1Count=0
 local m1Timer=0
 local dashCD=false
 local skill2CD=false
+local skill3CD=false
+local phase2=false
 local passive=false
+local selectMode=false
 
 local function stop()
 	running=false
 	if loopThread then task.cancel(loopThread) loopThread=nil end
 	hum.WalkSpeed=16 hum.JumpPower=50
+	phase2=false
 	ind.Text="⚔️ COMBAT: OFF" ind.TextColor3=Color3.fromRGB(160,160,160)
 	frame.Visible=false
 end
@@ -130,48 +134,50 @@ local function stopAim()
 	if aimConn then aimConn:Disconnect() aimConn=nil end
 end
 
--- DASH Q
+-- DASH - Click Q (game dash)
 local function doDash(dir)
 	if dashCD then return end
 	dashCD=true
-	local dashVec={
-		front=root.CFrame.LookVector,
-		back=-root.CFrame.LookVector,
-		left=-root.CFrame.RightVector,
-		right=root.CFrame.RightVector,
-	}
-	local v=dashVec[dir] or root.CFrame.LookVector
-	-- Simulate double Q tap
+	-- Rotate dulu ke arah yang mau di-dash
+	if dir=="left" then
+		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(90), 0)
+	elseif dir=="right" then
+		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(-90), 0)
+	elseif dir=="back" then
+		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(180), 0)
+	end
+	-- ✅ Click Q beneran!
 	pcall(function()
-		keypress(0x51) task.wait(0.05) keyrelease(0x51)
-		task.wait(0.05)
-		keypress(0x51) task.wait(0.05) keyrelease(0x51)
+		keypress(0x51)
+		task.wait(0.08)
+		keyrelease(0x51)
 	end)
-	-- Fallback: paksa velocity
-	pcall(function()
-		local bv=Instance.new("BodyVelocity")
-		bv.Velocity=v*60 bv.MaxForce=Vector3.new(1e5,0,1e5)
-		bv.P=1e4 bv.Parent=root
-		task.delay(0.2,function() bv:Destroy() end)
-	end)
-	task.delay(0.6,function() dashCD=false end)
-end
-
--- M1
-local function doM1()
-	pcall(function()
-		mouse1press() task.wait(0.08) mouse1release()
-	end)
+	task.delay(0.7, function() dashCD=false end)
 end
 
 -- SKILL 2
 local function doSkill2()
 	if skill2CD then return end
 	skill2CD=true
-	pcall(function()
-		keypress(0x32) task.wait(0.1) keyrelease(0x32) -- key 2
+	pcall(function() keypress(0x32) task.wait(0.1) keyrelease(0x32) end)
+	task.delay(3, function() skill2CD=false end)
+end
+
+-- SKILL 3 - Dash kanan lalu kiri sambil skill 3
+local function doSkill3()
+	if skill3CD then return end
+	skill3CD=true
+	task.spawn(function()
+		-- Dash kanan
+		doDash("right")
+		task.wait(0.15)
+		-- Tekan skill 3
+		pcall(function() keypress(0x33) task.wait(0.1) keyrelease(0x33) end)
+		task.wait(0.15)
+		-- Dash kiri
+		doDash("left")
 	end)
-	task.delay(3,function() skill2CD=false end)
+	task.delay(3, function() skill3CD=false end)
 end
 
 -- BLOCK
@@ -221,7 +227,6 @@ local function startCombat()
 	local stuckT=0
 	local dashT=0
 	local jumpT=0
-	local passiveT=0
 
 	-- Start aim
 	local hrp=targetChar:FindFirstChild("HumanoidRootPart")
@@ -262,15 +267,23 @@ local function startCombat()
 			end
 			lastHP=curHP
 
-			-- Mode Passive (random gerak keliatan pro)
-			passiveT-=0.05
-			if passive and passiveT<=0 then
-				passiveT=math.random(8,15)*0.1
-				local r=math.random(1,4)
-				if r==1 then doDash("left")
-				elseif r==2 then doDash("right")
-				elseif r==3 then hum.Jump=true
-				end
+			-- Phase 2: HP < 39 → SUPER FAST!
+			local curHP2 = hum and hum.Health or 100
+			if curHP2 <= 39 and not phase2 then
+				phase2 = true
+				hum.WalkSpeed = 50
+				hum.JumpPower = 80
+				ind.Text = "⚔️ ⚡ PHASE 2!"
+				ind.TextColor3 = Color3.fromRGB(255, 50, 255)
+				-- Flash effect
+				task.spawn(function()
+					for _ = 1, 5 do
+						ind.TextColor3 = Color3.fromRGB(255,255,0)
+						task.wait(0.1)
+						ind.TextColor3 = Color3.fromRGB(255,50,255)
+						task.wait(0.1)
+					end
+				end)
 			end
 
 			-- Random loncat
@@ -280,16 +293,23 @@ local function startCombat()
 				if math.random(1,3)==1 then hum.Jump=true end
 			end
 
-			-- M1 + skill 2
+			-- M1 + skill logic
 			m1Timer-=0.05
 			if dist<6 and m1Timer<=0 then
-				m1Timer=0.3
-				doM1()
+				m1Timer = phase2 and 0.2 or 0.3
+				pcall(function() mouse1press() task.wait(0.08) mouse1release() end)
 				m1Count+=1
 				tstatus.Text="👊 M1 x"..m1Count.." | "..targetName
 				tstatus.TextColor3=Color3.fromRGB(255,60,60)
-				-- Skill 2 setelah 3x M1
-				if m1Count>=3 then
+
+				-- Skill 3 setelah M1 ke-2 → dash kanan kiri
+				if m1Count==2 then
+					doSkill3()
+					tstatus.Text="⚡ SKILL 3 + DASH!"
+					tstatus.TextColor3=Color3.fromRGB(255,150,0)
+				end
+				-- Skill 2 setelah M1 ke-4
+				if m1Count>=4 then
 					m1Count=0
 					doSkill2()
 					tstatus.Text="💥 SKILL 2!"
@@ -361,10 +381,50 @@ UIS.InputBegan:Connect(function(key,gp)
 			end
 		end
 	elseif key.KeyCode==Enum.KeyCode.P then
-		-- P = toggle passive mode
 		passive=not passive
-		ind.Text=passive and "⚔️ PASSIVE ON" or "⚔️ "..targetName
+		ind.Text=passive and "⚔️ PASSIVE ON" or "⚔️ "..(running and targetName or "COMBAT: OFF")
 		ind.TextColor3=passive and Color3.fromRGB(0,200,255) or Color3.fromRGB(255,60,60)
+	elseif key.KeyCode==Enum.KeyCode.U then
+		-- U = Select target dari list player terdekat
+		if selectMode then
+			selectMode=false
+			ind.Text=running and "⚔️ "..targetName or "⚔️ COMBAT: OFF"
+			ind.TextColor3=running and Color3.fromRGB(255,60,60) or Color3.fromRGB(160,160,160)
+		else
+			selectMode=true
+			stop() stopAim()
+			-- Cari semua target tersedia
+			local targets={}
+			for _,p in ipairs(Players:GetPlayers()) do
+				if p~=player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+					local d=math.floor((root.Position-p.Character.HumanoidRootPart.Position).Magnitude)
+					table.insert(targets,{name=p.Name,char=p.Character,dist=d})
+				end
+			end
+			table.sort(targets,function(a,b) return a.dist<b.dist end)
+			if #targets==0 then
+				ind.Text="⚔️ Gak ada target!"
+				ind.TextColor3=Color3.fromRGB(255,80,80)
+				selectMode=false
+				task.delay(2,function()
+					ind.Text="⚔️ COMBAT: OFF"
+					ind.TextColor3=Color3.fromRGB(160,160,160)
+				end)
+			else
+				-- Show list di GUI
+				frame.Visible=true
+				local listText="🎯 Pilih (ketik nama):\n"
+				for i,t in ipairs(targets) do
+					listText=listText..i..". "..t.name.." ("..t.dist.."s)\n"
+					if i>=5 then break end
+				end
+				tstatus.Text=listText
+				tstatus.TextColor3=Color3.fromRGB(255,200,0)
+				tinput.Text="" tinput:CaptureFocus()
+				ind.Text="⚔️ SELECT TARGET"
+				ind.TextColor3=Color3.fromRGB(255,200,0)
+			end
+		end
 	end
 end)
 
