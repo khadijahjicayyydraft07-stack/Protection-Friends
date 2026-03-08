@@ -1,7 +1,7 @@
 -- ClientTeamAndSelfHealth.lua
 -- LocalScript -> letakkan di StarterPlayer > StarterPlayerScripts
--- Menampilkan darah pemain lokal (kiri-bawah) dan daftar darah rekan tim (kiri-atas).
--- Gunakan hanya di game yang kamu kembangkan / kamu diberi izin.
+-- Menampilkan darah pemain lokal (kiri-bawah) dan daftar rekan tim (kiri-atas).
+-- Gunakan hanya di game yang kamu kembangkan / diberi izin.
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -123,11 +123,9 @@ end
 -- Decide whether to show this other player: same team as local player (and not local player in team list)
 local function shouldShowAsTeammate(other)
     if not other then return false end
-    -- If both have Team objects set, compare. If nil, you can adapt to your game's team logic.
     if LocalPlayer.Team and other.Team then
         return LocalPlayer.Team == other.Team and other ~= LocalPlayer
     end
-    -- fallback: if game doesn't use Teams service, you can insert custom logic here.
     return false
 end
 
@@ -212,10 +210,8 @@ local function attachToPlayerCharacter(player)
 
     local humanoid = getHumanoidFromCharacter(character)
     if not humanoid then
-        -- wait a bit
         humanoid = character:WaitForChild("Humanoid", 5)
         if not humanoid then
-            -- can't find humanoid; give up for now
             return
         end
     end
@@ -227,7 +223,6 @@ local function attachToPlayerCharacter(player)
     if shouldShowAsTeammate(player) then
         updateTeammateLabel(player, humanoid)
     else
-        -- if previously had label for this player, remove it
         if labels[player] then removePlayerUI(player) end
     end
 
@@ -253,7 +248,6 @@ local function attachToPlayerCharacter(player)
     local ancestryConn
     ancestryConn = character.AncestryChanged:Connect(function(_, parent)
         if not parent then
-            -- character removed
             if player == LocalPlayer then
                 selfLabel.Text = "Darah: -- / --"
             end
@@ -280,30 +274,24 @@ end
 
 -- Re-evaluate teammates when local player's team changes
 local function refreshAllTeamDisplays()
-    -- remove labels for players who are no longer teammates
     for p, _ in pairs(labels) do
         if not shouldShowAsTeammate(p) then
             removePlayerUI(p)
         end
     end
-    -- attach to players who are teammates and not yet tracked
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and shouldShowAsTeammate(p) then
             attachToPlayerCharacter(p)
         end
     end
-    -- ensure local player's humanoid tracked
     attachToPlayerCharacter(LocalPlayer)
 end
 
 -- Player join / leave handlers
 Players.PlayerAdded:Connect(function(p)
-    -- track for team changes and character spawns
     p:GetPropertyChangedSignal("Team"):Connect(function()
-        -- if this player's team changed, update displays appropriately
         refreshAllTeamDisplays()
     end)
-    -- attach if teammate
     attachToPlayerCharacter(p)
 end)
 
@@ -311,21 +299,17 @@ Players.PlayerRemoving:Connect(function(p)
     removePlayerUI(p)
 end)
 
--- Local player team or team change handling
 LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
     refreshAllTeamDisplays()
 end)
 
--- Initial setup for existing players
 for _, p in ipairs(Players:GetPlayers()) do
-    -- connect team property change on other players as well
     p:GetPropertyChangedSignal("Team"):Connect(function()
         refreshAllTeamDisplays()
     end)
     attachToPlayerCharacter(p)
 end
 
--- Ensure local player's label updates on respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     attachToPlayerCharacter(LocalPlayer)
 end)
