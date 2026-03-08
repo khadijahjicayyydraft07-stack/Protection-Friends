@@ -1,122 +1,147 @@
--- LocalHealthGUI.lua
+-- TeammateHealthUI.lua
 -- Letakkan sebagai LocalScript di StarterPlayer > StarterPlayerScripts
--- Menampilkan "Darah: <current> / <max>" di kiri bawah hanya untuk pemain lokal.
--- Menampilkan teks "SEKARAT" ketika darah <= SEKARAT_THRESHOLD.
+-- Menerima update dari RemoteEvent "TeamHealthUpdate" dan menampilkan teks sederhana.
+-- Menampilkan "SEKARAT" saat HP <= ambang.
 
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- Konfigurasi tampilan
+local player = Players.LocalPlayer
+local REMOTE_NAME = "TeamHealthUpdate"
+local remote = ReplicatedStorage:WaitForChild(REMOTE_NAME)
+
+-- UI config
 local PADDING_X = 10
 local PADDING_Y = 10
 local LABEL_WIDTH = 220
-local LABEL_HEIGHT = 36
+local LABEL_HEIGHT = 28
 local FONT = Enum.Font.SourceSansBold
-local FONT_SIZE = 20
-local BG_COLOR = Color3.fromRGB(24, 24, 24)
-local BG_TRANSPARENCY = 0.4
-local TEXT_COLOR = Color3.fromRGB(255, 255, 255)
-
--- Ambang batas "sekarat" (ubah sesuai keinginan; contoh: 16)
+local FONT_SIZE = 18
 local SEKARAT_THRESHOLD = 16
 
+-- Container UI (top-left list)
 local function createUI()
     local playerGui = player:WaitForChild("PlayerGui")
-    local screenGui = playerGui:FindFirstChild("LocalHealthUI")
+    local screenGui = playerGui:FindFirstChild("TeammateHealthUI")
     if not screenGui then
         screenGui = Instance.new("ScreenGui")
-        screenGui.Name = "LocalHealthUI"
+        screenGui.Name = "TeammateHealthUI"
         screenGui.ResetOnSpawn = false
         screenGui.Parent = playerGui
     end
 
-    local label = screenGui:FindFirstChild("HealthText")
-    if not label then
-        label = Instance.new("TextLabel")
-        label.Name = "HealthText"
-        label.Parent = screenGui
-
-        label.AnchorPoint = Vector2.new(0, 1) -- bottom-left anchor
-        label.Position = UDim2.new(0, PADDING_X, 1, -PADDING_Y)
-        label.Size = UDim2.new(0, LABEL_WIDTH, 0, LABEL_HEIGHT)
-
-        label.BackgroundColor3 = BG_COLOR
-        label.BackgroundTransparency = BG_TRANSPARENCY
-        label.BorderSizePixel = 0
-
-        label.TextColor3 = TEXT_COLOR
-        label.Font = FONT
-        label.TextSize = FONT_SIZE
-        label.Text = "Darah: -- / --"
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.TextYAlignment = Enum.TextYAlignment.Center
-        -- optional padding inside label
-        -- Note: TextLabel.Padding property not available; use RichText spacing if needed.
+    local frame = screenGui:FindFirstChild("ListFrame")
+    if not frame then
+        frame = Instance.new("Frame")
+        frame.Name = "ListFrame"
+        frame.Parent = screenGui
+        frame.AnchorPoint = Vector2.new(0, 0) -- top-left
+        frame.Position = UDim2.new(0, PADDING_X, 0, PADDING_Y)
+        frame.Size = UDim2.new(0, LABEL_WIDTH, 0, 300)
+        frame.BackgroundTransparency = 1
     end
 
-    return screenGui, label
+    return screenGui, frame
 end
 
-local function clamp(v, a, b) if v < a then return a end if v > b then return b end return v end
+local screenGui, frame = createUI()
 
-local function attachToHumanoid(humanoid, label)
-    if not humanoid or not label then return end
+-- Keep labels by userId
+local labels = {}
 
-    local function update()
-        local current = math.floor(humanoid.Health + 0.5)
-        local max = math.floor(humanoid.MaxHealth + 0.5)
-        current = clamp(current, 0, max > 0 and max or 1)
-        max = math.max(1, max)
+local function makeLabelFor(userId, displayName)
+    local lbl = Instance.new("TextLabel")
+    lbl.Name = "HP_" .. tostring(userId)
+    lbl.Parent = frame
+    lbl.Size = UDim2.new(1, 0, 0, LABEL_HEIGHT)
+    lbl.BackgroundTransparency = 0.4
+    lbl.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    lbl.BorderSizePixel = 0
+    lbl.Font = FONT
+    lbl.TextSize = FONT_SIZE
+    lbl.TextColor3 = Color3.fromRGB(255,255,255)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Center
+    lbl.Text = displayName .. ": -- / --"
+    return lbl
+end
 
-        local statusText = ""
-        if current <= SEKARAT_THRESHOLD then
-            statusText = " — SEKARAT"
-        end
-
-        label.Text = string.format("Darah: %d / %d%s", current, max, statusText)
-
-        -- Warna teks berubah sesuai persentase (opsional)
-        local pct = current / max
-        if pct > 0.5 then
-            label.TextColor3 = Color3.fromRGB(120, 255, 120) -- hijau
-        elseif pct > 0.2 then
-            label.TextColor3 = Color3.fromRGB(255, 200, 80)  -- kuning/oranye
-        else
-            label.TextColor3 = Color3.fromRGB(255, 90, 90)   -- merah
-        end
+local function updateLayout()
+    -- stack labels vertically
+    local idx = 0
+    for _, lbl in pairs(labels) do
+        lbl.Position = UDim2.new(0, 0, 0, idx * LABEL_HEIGHT)
+        idx = idx + 1
     end
+    -- adjust frame height
+    frame.Size = UDim2.new(0, LABEL_WIDTH, 0, math.max(1, idx) * LABEL_HEIGHT)
+end
 
-    -- initial
-    update()
-
-    -- sambungkan event
-    local healthConn = humanoid.HealthChanged:Connect(update)
-    local maxConn = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(update)
-
-    -- kembalikan fungsi cleanup
-    return function()
-        if healthConn then healthConn:Disconnect() end
-        if maxConn then maxConn:Disconnect() end
+local function removeLabel(userId)
+    local lbl = labels[userId]
+    if lbl then
+        lbl:Destroy()
+        labels[userId] = nil
+        updateLayout()
     end
 end
 
--- Main flow: buat UI dan attach ke humanoid saat spawn/respawn
-local screenGui, healthLabel = createUI()
-local currentDisconnectFunc
-
-local function onCharacterAdded(character)
-    local humanoid = character:FindFirstChildWhichIsA("Humanoid") or character:WaitForChild("Humanoid", 5)
-    if not humanoid then return end
-
-    if currentDisconnectFunc then
-        currentDisconnectFunc()
-        currentDisconnectFunc = nil
+local function setLabel(userId, name, current, max, left)
+    if left then
+        removeLabel(userId)
+        return
     end
 
-    currentDisconnectFunc = attachToHumanoid(humanoid, healthLabel)
+    local lbl = labels[userId]
+    if not lbl then
+        lbl = makeLabelFor(userId, name)
+        labels[userId] = lbl
+    end
+
+    -- Guard: avoid showing local player's own HP here if you prefer
+    if userId == player.UserId then
+        -- optional: skip showing self in teammate list
+        removeLabel(userId)
+        return
+    end
+
+    local cur = math.floor(current + 0.5)
+    local m = math.max(1, math.floor(max + 0.5))
+    cur = math.clamp(cur, 0, m)
+
+    local status = ""
+    if cur <= SEKARAT_THRESHOLD then
+        status = " — SEKARAT"
+    end
+
+    lbl.Text = string.format("%s: %d / %d%s", name, cur, m, status)
+
+    -- color coding by pct
+    local pct = (m > 0) and (cur / m) or 0
+    if pct > 0.6 then
+        lbl.TextColor3 = Color3.fromRGB(160,255,160)
+    elseif pct > 0.25 then
+        lbl.TextColor3 = Color3.fromRGB(255,210,110)
+    else
+        lbl.TextColor3 = Color3.fromRGB(255,120,120)
+    end
+
+    updateLayout()
 end
 
-player.CharacterAdded:Connect(onCharacterAdded)
-if player.Character then
-    onCharacterAdded(player.Character)
-end
+-- Receive updates from server
+remote.OnClientEvent:Connect(function(data)
+    -- data = { userId = number, name = string, current = number, max = number, left = bool (optional) }
+    if not data or not data.userId then return end
+
+    -- Only show teammates because server only sends to teammates
+    setLabel(data.userId, data.name or "Player", data.current or 0, data.max or 0, data.left)
+end)
+
+-- Cleanup when players leave
+Players.PlayerRemoving:Connect(function(leaving)
+    removeLabel(leaving.UserId)
+end)
+
+-- Optionally: request initial snapshot from server (not implemented here).
+-- You can extend server to FireClient with initial states on player join.
