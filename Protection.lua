@@ -1,167 +1,202 @@
--- LocalShowOthersHealth.lua
+-- CombinedHealthUI - Fixed & Upgraded
 -- LocalScript -> letakkan di StarterPlayer > StarterPlayerScripts
--- Menampilkan darah pemain LAIN (bukan self) di kiri-atas.
--- Gunakan hanya di game yang kamu kembangkan / diberi izin.
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- UI config
-local PADDING = Vector2.new(12, 12)
-local LABEL_WIDTH = 240
-local LABEL_HEIGHT = 26
-local FONT = Enum.Font.SourceSansBold
-local TEXT_SIZE = 18
+-- ========== CONFIG ==========
 local SEKARAT_THRESHOLD = 16
+local LIST_POSITION = UDim2.new(0, 15, 0, 15) -- Posisi list di layar (kiri atas)
+local CARD_WIDTH = 240
+local CARD_HEIGHT = 50
+local FONT = Enum.Font.SourceSansBold
+local BACKGROUND_COLOR = Color3.fromRGB(18,18,18)
+local BACKGROUND_TRANSPARENCY = 0.45
+-- ============================
 
--- helper
-local function clamp(v,a,b) if v<a then return a end if v>b then return b end return v end
+local function clamp(v, a, b) if v < a then return a end if v > b then return b end return v end
 
--- create GUI container
+-- Create Gui & Container
 local function getOrCreateGui()
     local pg = LocalPlayer:WaitForChild("PlayerGui")
-    local gui = pg:FindFirstChild("OtherHealthUI")
+    local gui = pg:FindFirstChild("PlayerHealthUI")
     if not gui then
         gui = Instance.new("ScreenGui")
-        gui.Name = "OtherHealthUI"
+        gui.Name = "PlayerHealthUI"
         gui.ResetOnSpawn = false
         gui.Parent = pg
     end
-    return gui
-end
-
-local gui = getOrCreateGui()
-local listFrame = gui:FindFirstChild("ListFrame")
-if not listFrame then
-    listFrame = Instance.new("Frame")
-    listFrame.Name = "ListFrame"
-    listFrame.Size = UDim2.new(0, LABEL_WIDTH, 0, 200)
-    listFrame.Position = UDim2.new(0, PADDING.X, 0, PADDING.Y)
-    listFrame.BackgroundTransparency = 1
-    listFrame.Parent = gui
-end
-
-local labels = {}      -- [player] = TextLabel
-local conns = {}       -- [player] = { healthConn, maxConn, ancestryConn }
-
-local function makeLabel(p)
-    local lbl = Instance.new("TextLabel")
-    lbl.Name = "HP_" .. tostring(p.UserId)
-    lbl.Size = UDim2.new(1, 0, 0, LABEL_HEIGHT)
-    lbl.BackgroundColor3 = Color3.fromRGB(20,20,20)
-    lbl.BackgroundTransparency = 0.45
-    lbl.BorderSizePixel = 0
-    lbl.Font = FONT
-    lbl.TextSize = TEXT_SIZE
-    lbl.TextColor3 = Color3.fromRGB(255,255,255)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextYAlignment = Enum.TextYAlignment.Center
-    lbl.Text = p.Name .. ": -- / --"
-    lbl.Parent = listFrame
-    return lbl
-end
-
-local function updateLayout()
-    local idx = 0
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and labels[p] then
-            labels[p].Position = UDim2.new(0, 0, 0, idx * LABEL_HEIGHT)
-            idx = idx + 1
-        end
+    
+    local listFrame = gui:FindFirstChild("ListContainer")
+    if not listFrame then
+        listFrame = Instance.new("Frame")
+        listFrame.Name = "ListContainer"
+        listFrame.Parent = gui
+        listFrame.BackgroundTransparency = 1
+        listFrame.Position = LIST_POSITION
+        listFrame.Size = UDim2.new(0, CARD_WIDTH, 1, -30)
+        
+        -- Pake UIListLayout biar otomatis rapi nyusun ke bawah
+        local layout = Instance.new("UIListLayout")
+        layout.Parent = listFrame
+        layout.Padding = UDim.new(0, 5)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
     end
-    listFrame.Size = UDim2.new(0, LABEL_WIDTH, 0, math.max(1, idx) * LABEL_HEIGHT)
+    
+    return listFrame
 end
 
-local function updateLabelFor(p, humanoid)
-    if labels[p] == nil then labels[p] = makeLabel(p) end
-    local lbl = labels[p]
+local listContainer = getOrCreateGui()
+
+-- Tracking tables
+local playerFrames = {} -- [player] = Frame
+local conns = {}        -- [player] = { ... }
+
+-- Bikin Kotak UI (Card) untuk masing-masing player
+local function createPlayerCard(p)
+    local frame = Instance.new("Frame")
+    frame.Name = "Card_" .. p.UserId
+    frame.Size = UDim2.new(1, 0, 0, CARD_HEIGHT)
+    frame.BackgroundColor3 = BACKGROUND_COLOR
+    frame.BackgroundTransparency = BACKGROUND_TRANSPARENCY
+    frame.BorderSizePixel = 0
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    -- Profile Picture (Avatar)
+    local avatarImg = Instance.new("ImageLabel")
+    avatarImg.Name = "Avatar"
+    avatarImg.Size = UDim2.new(0, CARD_HEIGHT - 10, 0, CARD_HEIGHT - 10)
+    avatarImg.Position = UDim2.new(0, 5, 0.5, 0)
+    avatarImg.AnchorPoint = Vector2.new(0, 0.5)
+    avatarImg.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    avatarImg.Parent = frame
+    
+    local imgCorner = Instance.new("UICorner")
+    imgCorner.CornerRadius = UDim.new(1, 0) -- Bikin bulat
+    imgCorner.Parent = avatarImg
+
+    -- Load Thumbnail (Pake task.spawn biar script gak stuck nunggu loading)
+    task.spawn(function()
+        local content, isReady = Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+        if avatarImg then avatarImg.Image = content end
+    end)
+
+    -- Text Data
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "InfoText"
+    textLabel.Size = UDim2.new(1, -(CARD_HEIGHT + 5), 1, 0)
+    textLabel.Position = UDim2.new(0, CARD_HEIGHT + 5, 0, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Font = FONT
+    textLabel.TextSize = 16
+    textLabel.TextColor3 = Color3.fromRGB(255,255,255)
+    textLabel.TextXAlignment = Enum.TextXAlignment.Left
+    textLabel.TextYAlignment = Enum.TextYAlignment.Center
+    textLabel.Text = p.Name .. "\nLoading..."
+    textLabel.Parent = frame
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.Parent = textLabel
+
+    frame.Parent = listContainer
+    return frame
+end
+
+-- Update Text & Warna
+local function updatePlayerUI(p, humanoid)
+    if not playerFrames[p] then
+        playerFrames[p] = createPlayerCard(p)
+    end
+    
+    local frame = playerFrames[p]
+    local txt = frame:FindFirstChild("InfoText")
+    
     if not humanoid then
-        lbl.Text = string.format("%s: -- / --", p.Name)
-        lbl.TextColor3 = Color3.fromRGB(200,200,200)
-        updateLayout()
+        txt.Text = "Menunggu Spawn...\n" .. p.Name
+        txt.TextColor3 = Color3.fromRGB(150, 150, 150)
         return
     end
+    
     local cur = math.floor(humanoid.Health + 0.5)
-    local mx  = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
+    local mx = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
     cur = clamp(cur, 0, mx)
-    local status = cur <= SEKARAT_THRESHOLD and " — SEKARAT" or ""
-    lbl.Text = string.format("%s: %d / %d%s", p.Name, cur, mx, status)
-    local pct = cur / mx
-    if pct > 0.6 then
-        lbl.TextColor3 = Color3.fromRGB(160,255,160)
-    elseif pct > 0.25 then
-        lbl.TextColor3 = Color3.fromRGB(255,210,110)
+    
+    -- LOGIKA MATI & SEKARAT
+    if cur <= 0 then
+        txt.Text = p.Name .. ".Mati"
+        txt.TextColor3 = Color3.fromRGB(255, 60, 60)
     else
-        lbl.TextColor3 = Color3.fromRGB(255,120,120)
+        local status = ""
+        if cur <= SEKARAT_THRESHOLD then status = " (SEKARAT)" end
+        
+        -- NAMA DI BAWAH, DARAH DI ATAS
+        txt.Text = string.format("Darah: %d / %d%s\n%s", cur, mx, status, p.Name)
+        
+        local pct = cur / mx
+        if pct > 0.6 then
+            txt.TextColor3 = Color3.fromRGB(170, 255, 170) -- Hijau
+        elseif pct > 0.25 then
+            txt.TextColor3 = Color3.fromRGB(255, 220, 110) -- Kuning
+        else
+            txt.TextColor3 = Color3.fromRGB(255, 110, 110) -- Merah (Sekarat)
+        end
     end
-    updateLayout()
 end
 
-local function attachPlayer(p)
-    -- skip self
-    if p == LocalPlayer then return end
-
-    -- cleanup previous
+-- Deteksi Karakter & Humanoid
+local function attachToPlayer(p)
     if conns[p] then
-        if conns[p].healthConn then conns[p].healthConn:Disconnect() end
-        if conns[p].maxConn then conns[p].maxConn:Disconnect() end
-        if conns[p].ancestryConn then conns[p].ancestryConn:Disconnect() end
+        for _, c in pairs(conns[p]) do c:Disconnect() end
         conns[p] = nil
     end
 
     local function onCharacter(char)
         local humanoid = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 5)
         if not humanoid then
-            updateLabelFor(p, nil)
+            updatePlayerUI(p, nil)
             return
         end
-        updateLabelFor(p, humanoid)
-        local hConn = humanoid.HealthChanged:Connect(function() updateLabelFor(p, humanoid) end)
-        local mConn = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function() updateLabelFor(p, humanoid) end)
+
+        updatePlayerUI(p, humanoid)
+
+        local hConn = humanoid.HealthChanged:Connect(function() updatePlayerUI(p, humanoid) end)
+        local mConn = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function() updatePlayerUI(p, humanoid) end)
         local aConn = char.AncestryChanged:Connect(function(_, parent)
             if not parent then
-                updateLabelFor(p, nil)
+                updatePlayerUI(p, nil)
                 if hConn then hConn:Disconnect() end
                 if mConn then mConn:Disconnect() end
-                if aConn then aConn:Disconnect() end
             end
         end)
+
         conns[p] = { healthConn = hConn, maxConn = mConn, ancestryConn = aConn }
     end
 
-    -- if no character yet, wait for CharacterAdded
     if p.Character then
         onCharacter(p.Character)
-    else
-        local conn
-        conn = p.CharacterAdded:Connect(function(char)
-            if conn then conn:Disconnect() end
-            onCharacter(char)
-        end)
-        conns[p] = { ancestryConn = conn }
     end
+    
+    local charConn = p.CharacterAdded:Connect(onCharacter)
+    if not conns[p] then conns[p] = {} end
+    conns[p].charAddedConn = charConn
 end
 
 local function detachPlayer(p)
-    if labels[p] then labels[p]:Destroy() labels[p] = nil end
+    if playerFrames[p] then
+        playerFrames[p]:Destroy()
+        playerFrames[p] = nil
+    end
     if conns[p] then
-        if conns[p].healthConn then conns[p].healthConn:Disconnect() end
-        if conns[p].maxConn then conns[p].maxConn:Disconnect() end
-        if conns[p].ancestryConn then conns[p].ancestryConn:Disconnect() end
+        for _, c in pairs(conns[p]) do c:Disconnect() end
         conns[p] = nil
     end
-    updateLayout()
 end
 
--- initial attach for existing players
-for _, p in ipairs(Players:GetPlayers()) do
-    attachPlayer(p)
-end
-
-Players.PlayerAdded:Connect(function(p)
-    attachPlayer(p)
-end)
-
-Players.PlayerRemoving:Connect(function(p)
-    detachPlayer(p)
-end)
+-- INIT
+for _, p in ipairs(Players:GetPlayers()) do attachToPlayer(p) end
+Players.PlayerAdded:Connect(attachToPlayer)
+Players.PlayerRemoving:Connect(detachPlayer)
