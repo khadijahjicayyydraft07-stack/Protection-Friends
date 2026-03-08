@@ -1,490 +1,274 @@
--- // Combat AI v2 | Jujutsu Shenanigans
--- // T=Nama | Y=Start/Stop
+-- NPCCombatAI.lua
+-- Server-side combat AI for NPCs (safe, non-exploit)
+-- Place this script in ServerScriptService.
+-- NPCs should be parented to workspace.NPCs and be a Model containing:
+--   - Humanoid
+--   - HumanoidRootPart
+-- Optionally, set a NumberValue named "AggroRange" or "AttackRange" on the model to customize.
 
 local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local PFS = game:GetService("PathfindingService")
-local RS = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+local NPC_FOLDER = workspace:FindFirstChild("NPCs") or Instance.new("Folder", workspace)
+NPC_FOLDER.Name = "NPCs"
 
-local player = Players.LocalPlayer
-local char = player.Character or player.CharacterAdded:Wait()
-local hum = char:WaitForChild("Humanoid")
-local root = char:WaitForChild("HumanoidRootPart")
-local cam = workspace.CurrentCamera
+-- Configuration defaults
+local DEFAULT_AGGRO_RANGE = 50
+local DEFAULT_ATTACK_RANGE = 4
+local PATH_RECOMPUTE_INTERVAL = 1.0
+local LOOP_WAIT = 0.1
 
-player.CharacterAdded:Connect(function(c)
-	char=c hum=c:WaitForChild("Humanoid") root=c:WaitForChild("HumanoidRootPart")
-end)
-
--- GUI
-local pg = player:WaitForChild("PlayerGui")
-if pg:FindFirstChild("CAIG") then pg:FindFirstChild("CAIG"):Destroy() end
-local gui = Instance.new("ScreenGui") gui.Name="CAIG" gui.ResetOnSpawn=false gui.Parent=pg
-
-local ind = Instance.new("TextLabel",gui)
-ind.Size=UDim2.new(0,220,0,30) ind.Position=UDim2.new(0,10,1,-42)
-ind.BackgroundColor3=Color3.fromRGB(18,18,18) ind.BorderSizePixel=0
-ind.Text="⚔️ COMBAT: OFF" ind.TextColor3=Color3.fromRGB(160,160,160)
-ind.TextScaled=true ind.Font=Enum.Font.GothamBold
-Instance.new("UICorner",ind).CornerRadius=UDim.new(0,7)
-
-local frame = Instance.new("Frame",gui)
-frame.Size=UDim2.new(0,300,0,100) frame.Position=UDim2.new(0.5,-150,1,-120)
-frame.BackgroundColor3=Color3.fromRGB(18,18,18) frame.BorderSizePixel=0 frame.Visible=false
-Instance.new("UICorner",frame).CornerRadius=UDim.new(0,10)
-Instance.new("UIStroke",frame).Color=Color3.fromRGB(255,60,60)
-
-local tlabel=Instance.new("TextLabel",frame)
-tlabel.Size=UDim2.new(1,0,0,25) tlabel.BackgroundTransparency=1
-tlabel.Text="⚔️ Ketik nama musuh" tlabel.TextColor3=Color3.fromRGB(255,60,60)
-tlabel.TextScaled=true tlabel.Font=Enum.Font.GothamBold
-
-local tinput=Instance.new("TextBox",frame)
-tinput.Size=UDim2.new(1,-20,0,32) tinput.Position=UDim2.new(0,10,0,28)
-tinput.BackgroundColor3=Color3.fromRGB(35,35,35) tinput.BorderSizePixel=0
-tinput.Text="" tinput.PlaceholderText="Nama player / NPC..."
-tinput.PlaceholderColor3=Color3.fromRGB(90,90,90)
-tinput.TextColor3=Color3.fromRGB(255,255,255) tinput.TextScaled=true
-tinput.Font=Enum.Font.Gotham tinput.ClearTextOnFocus=false
-Instance.new("UICorner",tinput).CornerRadius=UDim.new(0,6)
-
--- Autocomplete label (bayangan nama)
-local autoLabel=Instance.new("TextLabel",frame)
-autoLabel.Size=UDim2.new(1,-20,0,32) autoLabel.Position=UDim2.new(0,10,0,28)
-autoLabel.BackgroundTransparency=1 autoLabel.Text=""
-autoLabel.TextColor3=Color3.fromRGB(80,80,80) autoLabel.TextScaled=true
-autoLabel.Font=Enum.Font.Gotham autoLabel.TextXAlignment=Enum.TextXAlignment.Left
-autoLabel.ZIndex=0
-
-local tstatus=Instance.new("TextLabel",frame)
-tstatus.Size=UDim2.new(1,-20,0,22) tstatus.Position=UDim2.new(0,10,0,72)
-tstatus.BackgroundTransparency=1 tstatus.Text=""
-tstatus.TextColor3=Color3.fromRGB(200,200,200) tstatus.TextScaled=true
-tstatus.Font=Enum.Font.Gotham tstatus.TextXAlignment=Enum.TextXAlignment.Left
-
--- STATE
-local running=false
-local loopThread=nil
-local targetChar=nil
-local targetName=""
-local lastHP=100
-local m1Count=0
-local m1Timer=0
-local dashCD=false
-local skill2CD=false
-local skill3CD=false
-local phase2=false
-local passive=false
-local selectMode=false
-
-local function stop()
-	running=false
-	if loopThread then task.cancel(loopThread) loopThread=nil end
-	hum.WalkSpeed=16 hum.JumpPower=50
-	phase2=false
-	ind.Text="⚔️ COMBAT: OFF" ind.TextColor3=Color3.fromRGB(160,160,160)
-	frame.Visible=false
-end
-
--- AUTOCOMPLETE
-local function getPlayerNames()
-	local names={}
-	for _,p in ipairs(Players:GetPlayers()) do
-		if p~=player then table.insert(names,p.Name) end
-	end
-	for _,obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("Model") and obj~=char and obj:FindFirstChildOfClass("Humanoid") then
-			table.insert(names,obj.Name)
+-- Utility: find nearest player character within range
+local function getNearestPlayerCharacter(npcPosition, maxRange)
+	local bestDist = maxRange
+	local bestChar = nil
+	for _, pl in pairs(Players:GetPlayers()) do
+		local char = pl.Character
+		if char and char.PrimaryPart and char:FindFirstChildOfClass("Humanoid") then
+			local hrp = char.PrimaryPart
+			local dist = (hrp.Position - npcPosition).Magnitude
+			if dist <= bestDist then
+				bestDist = dist
+				bestChar = char
+			end
 		end
 	end
-	return names
+	return bestChar, bestDist
 end
 
-tinput:GetPropertyChangedSignal("Text"):Connect(function()
-	local txt=tinput.Text
-	if txt=="" then autoLabel.Text="" return end
-	for _,name in ipairs(getPlayerNames()) do
-		if name:lower():sub(1,#txt)==txt:lower() then
-			autoLabel.Text=name
-			return
-		end
+-- Simple ray LOS check (ignores transparent and some small parts)
+local function hasLineOfSight(fromPos, toPos)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	params.IgnoreWater = true
+	-- Lines should ignore NPCs themselves; caller may add more filters
+	local result = workspace:Raycast(fromPos, (toPos - fromPos), params)
+	-- If raycast hits nothing, assume LOS clear; if hit, check if hit instance is part of target character externally handled
+	return result == nil
+end
+
+-- Create path waypoints from origin to target position
+local function computePath(origin, destination)
+	local path = PathfindingService:CreatePath({
+		AgentRadius = 2,
+		AgentHeight = 5,
+		AgentCanJump = true,
+		AgentCanClimb = false,
+		WaypointSpacing = 2,
+	})
+	local ok, err = pcall(function()
+		path:ComputeAsync(origin, destination)
+	end)
+	if not ok then
+		warn("Path compute failed:", err)
+		return nil
 	end
-	autoLabel.Text=""
-end)
-
--- Tab = autocomplete
-UIS.InputBegan:Connect(function(key,gp)
-	if key.KeyCode==Enum.KeyCode.Tab and frame.Visible and autoLabel.Text~="" then
-		tinput.Text=autoLabel.Text
-		autoLabel.Text=""
+	if path.Status == Enum.PathStatus.Success then
+		return path:GetWaypoints()
 	end
-end)
-
--- AIM KAMERA
-local aimConn=nil
-local function startAim(hrp)
-	if aimConn then aimConn:Disconnect() end
-	aimConn=RS.RenderStepped:Connect(function()
-		if not hrp or not hrp.Parent then aimConn:Disconnect() return end
-		local dir=(hrp.Position-cam.CFrame.Position).Unit
-		cam.CFrame=CFrame.new(cam.CFrame.Position,cam.CFrame.Position+dir)
-	end)
-end
-local function stopAim()
-	if aimConn then aimConn:Disconnect() aimConn=nil end
-end
-
--- DASH - Click Q (game dash)
-local function doDash(dir)
-	if dashCD then return end
-	dashCD=true
-	-- Rotate dulu ke arah yang mau di-dash
-	if dir=="left" then
-		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(90), 0)
-	elseif dir=="right" then
-		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(-90), 0)
-	elseif dir=="back" then
-		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(180), 0)
-	end
-	-- ✅ Click Q beneran!
-	pcall(function()
-		keypress(0x51)
-		task.wait(0.08)
-		keyrelease(0x51)
-	end)
-	task.delay(0.7, function() dashCD=false end)
-end
-
--- SKILL 2
-local function doSkill2()
-	if skill2CD then return end
-	skill2CD=true
-	pcall(function() keypress(0x32) task.wait(0.1) keyrelease(0x32) end)
-	task.delay(3, function() skill2CD=false end)
-end
-
--- SKILL 3 - Dash kanan lalu kiri sambil skill 3
-local function doSkill3()
-	if skill3CD then return end
-	skill3CD=true
-	task.spawn(function()
-		-- Dash kanan
-		doDash("right")
-		task.wait(0.15)
-		-- Tekan skill 3
-		pcall(function() keypress(0x33) task.wait(0.1) keyrelease(0x33) end)
-		task.wait(0.15)
-		-- Dash kiri
-		doDash("left")
-	end)
-	task.delay(3, function() skill3CD=false end)
-end
-
--- BLOCK
-local function doBlock(state)
-	pcall(function()
-		if state then keypress(0x46) else keyrelease(0x46) end
-	end)
-end
-
--- PATHFIND
-local function getPath(dest)
-	local path=PFS:CreatePath({AgentRadius=1,AgentHeight=5,AgentCanJump=true,AgentCanClimb=true,WaypointSpacing=1.5})
-	local ok=pcall(function() path:ComputeAsync(root.Position,dest) end)
-	if ok and path.Status==Enum.PathStatus.Success then return path:GetWaypoints() end
 	return nil
 end
 
--- FIND TARGET
-local function findTarget(name)
-	name=name:lower()
-	for _,p in ipairs(Players:GetPlayers()) do
-		if p.Name:lower():find(name) and p~=player then
-			local c=p.Character
-			if c and c:FindFirstChild("HumanoidRootPart") then return p.Name,c end
-		end
-	end
-	for _,obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("Model") and obj.Name:lower():find(name) and obj~=char then
-			if obj:FindFirstChild("HumanoidRootPart") and obj:FindFirstChildOfClass("Humanoid") then
-				return obj.Name,obj end
-		end
-	end
-	return nil,nil
+local function safeMoveTo(humanoid, destination)
+	-- Use MoveTo for server-side movement; can be replaced with Humanoid:MoveTo or SetVelocity for more advanced movement
+	pcall(function()
+		humanoid:MoveTo(destination)
+	end)
 end
 
--- MAIN COMBAT LOOP
-local function startCombat()
-	if not targetChar then return end
-	running=true m1Count=0
-	hum.WalkSpeed=24 hum.JumpPower=60
-	ind.Text="⚔️ "..targetName ind.TextColor3=Color3.fromRGB(255,60,60)
+-- AI core per-NPC
+local function runAIForNPC(npc)
+	-- Validate npc
+	if not npc or not npc.Parent then return end
+	local humanoid = npc:FindFirstChildOfClass("Humanoid")
+	local hrp = npc:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not hrp then return end
 
-	local wps,wi=nil,1
-	local lastDest=Vector3.zero
-	local recompT=0
-	local stuckPos=root.Position
-	local stuckT=0
-	local dashT=0
-	local jumpT=0
+	-- Per-NPC state
+	local aggroRange = npc:FindFirstChild("AggroRange") and npc.AggroRange.Value or DEFAULT_AGGRO_RANGE
+	local attackRange = npc:FindFirstChild("AttackRange") and npc.AttackRange.Value or DEFAULT_ATTACK_RANGE
+	local baseWalkSpeed = humanoid.WalkSpeed or 16
 
-	-- Start aim
-	local hrp=targetChar:FindFirstChild("HumanoidRootPart")
-	startAim(hrp)
+	local running = true
+	local currentTargetChar = nil
+	local lastPath = nil
+	local nextWaypointIndex = 1
+	local lastPathCompute = 0
+	local attackCooldown = 0
+	local dashCooldown = 0
+	local skillCooldown = 0
 
-	loopThread=task.spawn(function()
-		while running do
-			hrp=targetChar:FindFirstChild("HumanoidRootPart")
-			local th=targetChar:FindFirstChildOfClass("Humanoid")
-			if not hrp or not targetChar.Parent or (th and th.Health<=0) then
-				tstatus.Text="☠️ "..targetName.." mati!"
-				tstatus.TextColor3=Color3.fromRGB(100,255,180)
-				stopAim() stop() break
-			end
+	-- Helper: perform melee attack (server-side)
+	local function performMeleeAttack(targetHumanoid, damage)
+		if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+		-- Optional: you could add animations, damage events, or hitbox checks here.
+		-- We simply apply damage server-side.
+		targetHumanoid:TakeDamage(damage)
+	end
 
-			local dest=hrp.Position
-			local myXZ=Vector2.new(root.Position.X,root.Position.Z)
-			local dXZ=Vector2.new(dest.X,dest.Z)
-			local dist=(myXZ-dXZ).Magnitude
+	-- Helper: perform a short dash toward the target (teleport-like with checks)
+	local function performDashTowards(targetPos, dashDistance, dashSpeed)
+		-- dashSpeed unused here, present for expansion. We perform small step movement with collisions handled by physics.
+		local dir = (targetPos - hrp.Position)
+		dir = Vector3.new(dir.X, 0, dir.Z)
+		if dir.Magnitude <= 0 then return end
+		local unit = dir.Unit
+		local newPos = hrp.Position + unit * math.clamp(dashDistance, 0, dashDistance)
+		-- Move the NPC root gently using CFrame while preserving Y
+		local y = hrp.Position.Y
+		local targetCFrame = CFrame.new(Vector3.new(newPos.X, y, newPos.Z), Vector3.new(targetPos.X, y, targetPos.Z))
+		-- Apply instantly; you can smooth this if desired
+		pcall(function()
+			hrp.CFrame = targetCFrame
+		end)
+	end
 
-			-- HP detect → block + dash belakang
-			local curHP=hum and hum.Health or 100
-			if curHP<lastHP-1 then
-				lastHP=curHP
-				tstatus.Text="🛡️ BLOCK + DASH BELAKANG!"
-				tstatus.TextColor3=Color3.fromRGB(0,200,255)
-				doBlock(true)
-				task.wait(0.1)
-				-- Dash ke belakang musuh! Muter layar dulu
-				doDash("back")
-				task.wait(0.3)
-				doBlock(false)
-				-- Rotate ke belakang target
-				root.CFrame=CFrame.new(
-					hrp.Position + hrp.CFrame.LookVector*2.5,
-					hrp.Position
-				)
-			end
-			lastHP=curHP
+	-- Main loop
+	local heartbeatConn
+	heartbeatConn = RunService.Heartbeat:Connect(function(dt)
+		if not running or not npc.Parent then
+			heartbeatConn:Disconnect()
+			return
+		end
 
-			-- Phase 2: HP < 39 → SUPER FAST!
-			local curHP2 = hum and hum.Health or 100
-			if curHP2 <= 39 and not phase2 then
-				phase2 = true
-				hum.WalkSpeed = 50
-				hum.JumpPower = 80
-				ind.Text = "⚔️ ⚡ PHASE 2!"
-				ind.TextColor3 = Color3.fromRGB(255, 50, 255)
-				-- Flash effect
-				task.spawn(function()
-					for _ = 1, 5 do
-						ind.TextColor3 = Color3.fromRGB(255,255,0)
-						task.wait(0.1)
-						ind.TextColor3 = Color3.fromRGB(255,50,255)
-						task.wait(0.1)
-					end
-				end)
-			end
+		-- Update cooldowns
+		attackCooldown = math.max(0, attackCooldown - dt)
+		dashCooldown = math.max(0, dashCooldown - dt)
+		skillCooldown = math.max(0, skillCooldown - dt)
 
-			-- Random loncat
-			jumpT-=0.05
-			if jumpT<=0 and dist<8 then
-				jumpT=math.random(20,40)*0.1
-				if math.random(1,3)==1 then hum.Jump=true end
-			end
-
-			-- M1 + skill logic
-			m1Timer-=0.05
-			if dist<6 and m1Timer<=0 then
-				m1Timer = phase2 and 0.2 or 0.3
-				pcall(function() mouse1press() task.wait(0.08) mouse1release() end)
-				m1Count+=1
-				tstatus.Text="👊 M1 x"..m1Count.." | "..targetName
-				tstatus.TextColor3=Color3.fromRGB(255,60,60)
-
-				-- Skill 3 setelah M1 ke-2 → dash kanan kiri
-				if m1Count==2 then
-					doSkill3()
-					tstatus.Text="⚡ SKILL 3 + DASH!"
-					tstatus.TextColor3=Color3.fromRGB(255,150,0)
-				end
-				-- Skill 2 setelah M1 ke-4
-				if m1Count>=4 then
-					m1Count=0
-					doSkill2()
-					tstatus.Text="💥 SKILL 2!"
-					tstatus.TextColor3=Color3.fromRGB(255,200,0)
-				end
-			end
-
-			-- Dash ke depan kalau jauh
-			dashT-=0.05
-			if dist>15 and dashT<=0 then
-				dashT=1.5
-				doDash("front")
-			end
-
-			-- Pathfind
-			if dist>5 then
-				hum.WalkSpeed=24
-				recompT-=0.05
-				if (dest-lastDest).Magnitude>4 or wps==nil or recompT<=0 then
-					lastDest=dest recompT=1.5
-					local nw=getPath(dest)
-					if nw and #nw>1 then wps=nw wi=2 end
-				end
-				if wps and wi<=#wps then
-					local wpXZ=Vector2.new(wps[wi].Position.X,wps[wi].Position.Z)
-					if (myXZ-wpXZ).Magnitude<3 then wi+=1 end
-				end
-				local tgt=dest
-				if wps and wi<=#wps then
-					local aw=wps[wi]
-					if aw.Position.Y-root.Position.Y>0.7 then hum.Jump=true end
-					if aw.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
-					tgt=aw.Position
-				end
-				hum:MoveTo(tgt)
-				if (root.Position-stuckPos).Magnitude<0.5 then
-					stuckT+=0.05
-					if stuckT>1.5 then hum.Jump=true wps=nil stuckT=0 end
-				else stuckT=0 stuckPos=root.Position end
+		-- Acquire or validate target
+		if not currentTargetChar or not currentTargetChar.Parent or currentTargetChar:FindFirstChildOfClass("Humanoid") == nil then
+			local char, dist = getNearestPlayerCharacter(hrp.Position, aggroRange)
+			if char and dist <= aggroRange then
+				currentTargetChar = char
+				-- Reset path so AI recomputes
+				lastPath = nil
+				nextWaypointIndex = 1
 			else
-				hum.WalkSpeed=16
-				root.CFrame=CFrame.new(root.Position,Vector3.new(hrp.Position.X,root.Position.Y,hrp.Position.Z))
+				currentTargetChar = nil
+			end
+		end
+
+		if not currentTargetChar then
+			-- Idle behavior
+			humanoid.WalkSpeed = baseWalkSpeed
+			return
+		end
+
+		local targetHum = currentTargetChar:FindFirstChildOfClass("Humanoid")
+		local targetHRP = currentTargetChar.PrimaryPart
+		if not targetHum or not targetHRP or targetHum.Health <= 0 then
+			currentTargetChar = nil
+			return
+		end
+
+		local targetPos = targetHRP.Position
+		local toTarget = targetPos - hrp.Position
+		local horizontalDist = Vector3.new(toTarget.X, 0, toTarget.Z).Magnitude
+
+		-- If target is within attackRange, try melee
+		if horizontalDist <= attackRange then
+			-- Face target
+			hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z))
+
+			if attackCooldown <= 0 then
+				attackCooldown = 1.0 -- melee rate (seconds)
+				performMeleeAttack(targetHum, 10) -- damage amount
+				-- optional: set animation, effects, etc.
 			end
 
-			task.wait(0.05)
+			-- Small chance to dash away after hit (defensive maneuver)
+			if dashCooldown <= 0 and math.random() < 0.15 then
+				dashCooldown = 2.0
+				performDashTowards(hrp.Position - (targetPos - hrp.Position).Unit * 4, 4, 40)
+			end
+
+		else
+			-- Not in immediate attack range: pathfind and approach
+			humanoid.WalkSpeed = (horizontalDist > 20) and (baseWalkSpeed * 1.6) or baseWalkSpeed
+
+			-- Recompute path periodically or if target moved significantly
+			lastPathCompute = lastPathCompute + dt
+			if lastPath == nil or lastPathCompute >= PATH_RECOMPUTE_INTERVAL then
+				lastPathCompute = 0
+				local waypoints = computePath(hrp.Position, targetPos)
+				if waypoints and #waypoints > 0 then
+					lastPath = waypoints
+					nextWaypointIndex = 1
+				else
+					-- fallback: direct MoveTo
+					lastPath = nil
+					nextWaypointIndex = 1
+				end
+			end
+
+			-- Follow waypoints if available
+			if lastPath and nextWaypointIndex <= #lastPath then
+				local wp = lastPath[nextWaypointIndex]
+				local wpPos = wp.Position
+				-- If waypoint is reachable, step toward it
+				local delta = Vector3.new(wpPos.X, 0, wpPos.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+				if delta.Magnitude < 3 then
+					nextWaypointIndex = nextWaypointIndex + 1
+				else
+					-- Jump if required
+					if wp.Action == Enum.PathWaypointAction.Jump then
+						humanoid.Jump = true
+					end
+					-- Move toward waypoint
+					safeMoveTo(humanoid, wpPos)
+				end
+			else
+				-- No path: move directly
+				safeMoveTo(humanoid, targetPos)
+			end
+
+			-- Occasionally use a dash to close gap if far and cooldown available
+			if dashCooldown <= 0 and horizontalDist > 12 and math.random() < 0.25 then
+				dashCooldown = 3.0
+				performDashTowards(targetPos, math.clamp(horizontalDist - attackRange, 4, 12), 80)
+			end
+
+			-- Occasional special skill: short AOE if close and skill ready
+			if skillCooldown <= 0 and horizontalDist < 8 and math.random() < 0.08 then
+				skillCooldown = 5.0
+				-- AOE: damage any humanoid within radius
+				local radius = 6
+				for _, obj in pairs(workspace:GetDescendants()) do
+					if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+						local h = obj:FindFirstChildOfClass("Humanoid")
+						local p = obj.PrimaryPart
+						if h and p and (p.Position - hrp.Position).Magnitude <= radius and h.Health > 0 then
+							h:TakeDamage(8)
+						end
+					end
+				end
+			end
 		end
 	end)
 end
 
--- TOMBOL
-UIS.InputBegan:Connect(function(key,gp)
-	if gp then return end
-	if key.KeyCode==Enum.KeyCode.T then
-		stop() stopAim()
-		frame.Visible=not frame.Visible
-		if frame.Visible then
-			tinput.Text="" tinput:CaptureFocus()
-			tstatus.Text="Ketik nama musuh lalu Enter"
-			tstatus.TextColor3=Color3.fromRGB(160,160,160)
-		end
-	elseif key.KeyCode==Enum.KeyCode.Y then
-		if running then stop() stopAim()
-		else
-			if targetChar then startCombat()
-			else
-				frame.Visible=true
-				tstatus.Text="⚠️ Tulis nama dulu! (T)"
-				tstatus.TextColor3=Color3.fromRGB(255,200,0)
-			end
-		end
-	elseif key.KeyCode==Enum.KeyCode.P then
-		passive=not passive
-		ind.Text=passive and "⚔️ PASSIVE ON" or "⚔️ "..(running and targetName or "COMBAT: OFF")
-		ind.TextColor3=passive and Color3.fromRGB(0,200,255) or Color3.fromRGB(255,60,60)
-	elseif key.KeyCode==Enum.KeyCode.U then
-		-- U = Select target dari list player terdekat
-		if selectMode then
-			selectMode=false
-			ind.Text=running and "⚔️ "..targetName or "⚔️ COMBAT: OFF"
-			ind.TextColor3=running and Color3.fromRGB(255,60,60) or Color3.fromRGB(160,160,160)
-		else
-			selectMode=true
-			stop() stopAim()
-			-- Cari semua target tersedia
-			local targets={}
-			for _,p in ipairs(Players:GetPlayers()) do
-				if p~=player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-					local d=math.floor((root.Position-p.Character.HumanoidRootPart.Position).Magnitude)
-					table.insert(targets,{name=p.Name,char=p.Character,dist=d})
-				end
-			end
-			table.sort(targets,function(a,b) return a.dist<b.dist end)
-			if #targets==0 then
-				ind.Text="⚔️ Gak ada target!"
-				ind.TextColor3=Color3.fromRGB(255,80,80)
-				selectMode=false
-				task.delay(2,function()
-					ind.Text="⚔️ COMBAT: OFF"
-					ind.TextColor3=Color3.fromRGB(160,160,160)
-				end)
-			else
-				-- Show list di GUI
-				frame.Visible=true
-				local listText="🎯 Pilih (ketik nama):\n"
-				for i,t in ipairs(targets) do
-					listText=listText..i..". "..t.name.." ("..t.dist.."s)\n"
-					if i>=5 then break end
-				end
-				tstatus.Text=listText
-				tstatus.TextColor3=Color3.fromRGB(255,200,0)
-				tinput.Text="" tinput:CaptureFocus()
-				ind.Text="⚔️ SELECT TARGET"
-				ind.TextColor3=Color3.fromRGB(255,200,0)
-			end
-		end
-	end
+-- Attach AI to all existing NPCs in folder and listen for new ones
+local function setupNPC(npc)
+	-- Quick validation
+	if not npc:IsA("Model") then return end
+	if not npc:FindFirstChildOfClass("Humanoid") or not npc:FindFirstChild("HumanoidRootPart") then return end
+	-- Start AI loop in a coroutine so many NPCs can run concurrently
+	spawn(function()
+		runAIForNPC(npc)
+	end)
+end
+
+-- Initialize existing NPCs
+for _, npc in pairs(NPC_FOLDER:GetChildren()) do
+	setupNPC(npc)
+end
+
+-- Watch for new NPCs
+NPC_FOLDER.ChildAdded:Connect(function(child)
+	-- small delay to allow components to initialize
+	task.wait(0.1)
+	setupNPC(child)
 end)
 
-tinput.FocusLost:Connect(function(enter)
-	if not enter then return end
-	local name=tinput.Text:match("^%s*(.-)%s*$")
-	if name=="" then return end
-	local found,foundChar=findTarget(name)
-	if found then
-		targetName=found targetChar=foundChar
-		tstatus.Text="✅ Target: "..found.." | Y = Serang!"
-		tstatus.TextColor3=Color3.fromRGB(0,220,100)
-	else
-		tstatus.Text="❌ '"..name.."' gak ada!"
-		tstatus.TextColor3=Color3.fromRGB(255,80,80)
-		targetChar=nil
-	end
-end)
-
--- // JJS Argument Hook
--- // Coba M1, Dash, Skill sekali lalu lihat output nya!
-
-local RS = game:GetService("ReplicatedStorage")
-local Knit = RS.Knit.Knit.Services
-
--- Hook M1
-local M1 = Knit.ItemService.RE.M1
-local oldM1 = M1.FireServer
-M1.FireServer = function(self, ...)
-	print("[M1 ARGS]", ...)
-	return oldM1(self, ...)
-end
-
--- Hook Dash
-local Dash = Knit.MovementService.RE.Dash
-local oldDash = Dash.FireServer
-Dash.FireServer = function(self, ...)
-	print("[DASH ARGS]", ...)
-	return oldDash(self, ...)
-end
-
--- Hook Skill (Activated)
-local Skill = Knit.CharaService.RE.Activated
-local oldSkill = Skill.FireServer
-Skill.FireServer = function(self, ...)
-	print("[SKILL ARGS]", ...)
-	return oldSkill(self, ...)
-end
-
--- Hook Block
-local Block = Knit.BlockService.RE.Deactivated
-local oldBlock = Block.FireServer
-Block.FireServer = function(self, ...)
-	print("[BLOCK ARGS]", ...)
-	return oldBlock(self, ...)
-end
-
-print("[Hook] Aktif! Sekarang: M1, Dash, Skill, Block sekali lalu lihat output!")
-print("===================================")
-print("Copy semua hasil ini dan kasih ke gua!")
-
-
-print("[Combat AI v2] T=Nama | Y=Fight | P=Passive | Tab=Autocomplete")
+print("[NPCCombatAI] Loaded. NPCs under workspace.NPCs will run server-side combat AI.")
