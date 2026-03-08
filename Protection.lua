@@ -1,4 +1,4 @@
--- CombinedHealthUI - Device Detector Edition
+-- ULTIMATE UI: Health List + Death Notif + DEVICE DETECTOR (PC/Hape)
 -- LocalScript -> StarterPlayer > StarterPlayerScripts
 
 local Players = game:GetService("Players")
@@ -25,7 +25,7 @@ gui.Name = "PlayerHealthUI"
 gui.ResetOnSpawn = false
 gui.Parent = pg
 
--- 1. SCROLLING FRAME (Daftar Darah - Tetap Ada)
+-- 1. SCROLLING FRAME (Daftar Darah - Kiri Atas)
 local listContainer = Instance.new("ScrollingFrame")
 listContainer.Name = "HealthList"
 listContainer.Parent = gui
@@ -41,34 +41,34 @@ listLayout.Parent = listContainer
 listLayout.Padding = UDim.new(0, 5)
 listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
--- 2. DEVICE LIST FRAME (Ganti dari Ping Container)
-local deviceContainer = Instance.new("Frame")
-deviceContainer.Name = "DeviceContainer"
-deviceContainer.Parent = gui
-deviceContainer.AnchorPoint = Vector2.new(0.5, 0)
-deviceContainer.Position = UDim2.new(0.5, 0, 0, 10)
-deviceContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-deviceContainer.BackgroundTransparency = 0.2
-deviceContainer.Visible = false
+-- 2. DEVICE DETECTOR FRAME (Pusat Kendali Perangkat)
+local detectorContainer = Instance.new("Frame")
+detectorContainer.Name = "DetectorContainer" -- Nama udah diganti bang!
+detectorContainer.Parent = gui
+detectorContainer.AnchorPoint = Vector2.new(0.5, 0)
+detectorContainer.Position = UDim2.new(0.5, 0, 0, 10)
+detectorContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+detectorContainer.BackgroundTransparency = 0.3
+detectorContainer.Visible = false
 
-local deviceCorner = Instance.new("UICorner")
-deviceCorner.CornerRadius = UDim.new(0, 8)
-deviceCorner.Parent = deviceContainer
+local detCorner = Instance.new("UICorner")
+detCorner.CornerRadius = UDim.new(0, 8)
+detCorner.Parent = detectorContainer
 
-local deviceLayout = Instance.new("UIGridLayout")
-deviceLayout.Parent = deviceContainer
-deviceLayout.FillDirection = Enum.FillDirection.Horizontal
-deviceLayout.CellSize = UDim2.new(0, 155, 0, 35)
-deviceLayout.CellPadding = UDim2.new(0, 10, 0, 8)
-deviceLayout.SortOrder = Enum.SortOrder.LayoutOrder
+local detLayout = Instance.new("UIGridLayout")
+detLayout.Parent = detectorContainer
+detLayout.FillDirection = Enum.FillDirection.Horizontal
+detLayout.CellSize = UDim2.new(0, 155, 0, 40)
+detLayout.CellPadding = UDim2.new(0, 10, 0, 8)
+detLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
--- 3. DEATH NOTIFICATION FRAME (Tetap Ada)
+-- 3. DEATH NOTIFICATION (Tengah Layar)
 local deathFrame = Instance.new("Frame")
 deathFrame.Name = "DeathFrame"
 deathFrame.Parent = gui
 deathFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 deathFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-deathFrame.Size = UDim2.new(0, 280, 0, 80)
+deathFrame.Size = UDim2.new(0, 300, 0, 90)
 deathFrame.BackgroundColor3 = Color3.fromRGB(180, 20, 20)
 deathFrame.BackgroundTransparency = 1
 deathFrame.Visible = false
@@ -79,7 +79,7 @@ deathCorner.Parent = deathFrame
 
 local deathAvatar = Instance.new("ImageLabel")
 deathAvatar.Parent = deathFrame
-deathAvatar.Size = UDim2.new(0, 60, 0, 60)
+deathAvatar.Size = UDim2.new(0, 70, 0, 70)
 deathAvatar.Position = UDim2.new(0, 10, 0.5, 0)
 deathAvatar.AnchorPoint = Vector2.new(0, 0.5)
 deathAvatar.BackgroundTransparency = 1
@@ -88,45 +88,49 @@ Instance.new("UICorner", deathAvatar).CornerRadius = UDim.new(1, 0)
 
 local deathText = Instance.new("TextLabel")
 deathText.Parent = deathFrame
-deathText.Size = UDim2.new(1, -80, 1, 0)
-deathText.Position = UDim2.new(0, 80, 0, 0)
+deathText.Size = UDim2.new(1, -90, 1, 0)
+deathText.Position = UDim2.new(0, 90, 0, 0)
 deathText.BackgroundTransparency = 1
 deathText.Font = FONT
-deathText.TextSize = 20
+deathText.TextSize = 22
 deathText.TextColor3 = Color3.fromRGB(255, 255, 255)
 deathText.TextTransparency = 1
-deathText.Text = "Nama Telah Mati"
+deathText.Text = "Player Mati"
 
--- ================= UTILITIES =================
+-- ================= DETECTOR LOGIC =================
 
--- Cek Perangkat Local (Hanya akurat buat lu)
-local function getMyDevice()
-	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-		return "Hape", Color3.fromRGB(85, 255, 85) -- Hijau
-	elseif UserInputService.KeyboardEnabled then
-		return "PC", Color3.fromRGB(85, 255, 255) -- Biru Muda
-	elseif UserInputService.GamepadEnabled then
-		return "Console", Color3.fromRGB(255, 170, 0) -- Oranye
+local function getDeviceType(p)
+	if p == LocalPlayer then
+		-- Deteksi asli buat lu sendiri
+		if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+			return "Hape", Color3.fromRGB(85, 255, 85) -- Hijau
+		elseif UserInputService.GamepadEnabled then
+			return "Console", Color3.fromRGB(255, 170, 0) -- Oranye
+		else
+			return "PC", Color3.fromRGB(85, 255, 255) -- Cyan/Biru Minecraft
+		end
 	else
-		return "PC", Color3.fromRGB(255, 255, 255)
+		-- Tebakan buat player lain (karena LocalScript)
+		-- Lu bisa ganti default ini sesuka hati
+		return "PC/Hape", Color3.fromRGB(200, 200, 200) 
 	end
 end
 
 -- ================= STATE & TRACKING =================
 local playerFrames = {} 
-local deviceItems = {}
+local detectorItems = {}
 local conns = {}        
 local isDeadState = {}
 
 -- ================= FUNCTIONS =================
 
-local function createDeviceLabel(p)
+local function createDetectorItem(p)
 	local frame = Instance.new("Frame")
 	frame.BackgroundTransparency = 1
-	frame.Parent = deviceContainer
+	frame.Parent = detectorContainer
 	
 	local img = Instance.new("ImageLabel")
-	img.Size = UDim2.new(0, 25, 0, 25)
+	img.Size = UDim2.new(0, 30, 0, 30)
 	img.Position = UDim2.new(0, 2, 0.5, 0)
 	img.AnchorPoint = Vector2.new(0, 0.5)
 	img.BackgroundTransparency = 1
@@ -138,19 +142,19 @@ local function createDeviceLabel(p)
 	end)
 
 	local lbl = Instance.new("TextLabel")
-	lbl.Size = UDim2.new(1, -32, 1, 0)
-	lbl.Position = UDim2.new(0, 32, 0, 0)
+	lbl.Size = UDim2.new(1, -35, 1, 0)
+	lbl.Position = UDim2.new(0, 35, 0, 0)
 	lbl.BackgroundTransparency = 1
 	lbl.Font = FONT
-	lbl.TextSize = 13
+	lbl.TextSize = 12
 	lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
 	lbl.TextXAlignment = Enum.TextXAlignment.Left
 	lbl.Parent = frame
 	
-	deviceItems[p] = {Label = lbl, Frame = frame}
+	detectorItems[p] = {Label = lbl, Frame = frame}
 end
 
-local function showDeathNotification(p)
+local function showDeath(p)
 	if isDeadState[p] then return end
 	isDeadState[p] = true
 
@@ -160,150 +164,117 @@ local function showDeathNotification(p)
 	deathText.Text = p.Name .. "\nTelah Mati!"
 	deathFrame.Visible = true
 
-	local tiIn = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-	TweenService:Create(deathFrame, tiIn, {BackgroundTransparency = 0.2}):Play()
-	TweenService:Create(deathAvatar, tiIn, {ImageTransparency = 0}):Play()
-	TweenService:Create(deathText, tiIn, {TextTransparency = 0}):Play()
+	local ti = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+	TweenService:Create(deathFrame, ti, {BackgroundTransparency = 0.2}):Play()
+	TweenService:Create(deathAvatar, ti, {ImageTransparency = 0}):Play()
+	TweenService:Create(deathText, ti, {TextTransparency = 0}):Play()
 
 	task.wait(2.5)
 
-	local tiOut = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
-	TweenService:Create(deathFrame, tiOut, {BackgroundTransparency = 1}):Play()
-	TweenService:Create(deathAvatar, tiOut, {ImageTransparency = 1}):Play()
-	TweenService:Create(deathText, tiOut, {TextTransparency = 1}):Play()
+	local to = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+	TweenService:Create(deathFrame, to, {BackgroundTransparency = 1}):Play()
+	TweenService:Create(deathAvatar, to, {ImageTransparency = 1}):Play()
+	TweenService:Create(deathText, to, {TextTransparency = 1}):Play()
 	task.wait(0.5)
 	deathFrame.Visible = false
 end
 
-local function createPlayerCard(p)
+local function createHealthCard(p)
 	local frame = Instance.new("Frame")
-	frame.Name = "Card_" .. p.UserId
 	frame.Size = UDim2.new(1, 0, 0, CARD_HEIGHT)
 	frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
 	frame.BackgroundTransparency = 0.45
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
-	local avatarImg = Instance.new("ImageLabel")
-	avatarImg.Size = UDim2.new(0, CARD_HEIGHT - 10, 0, CARD_HEIGHT - 10)
-	avatarImg.Position = UDim2.new(0, 5, 0.5, 0)
-	avatarImg.AnchorPoint = Vector2.new(0, 0.5)
-	avatarImg.BackgroundColor3 = Color3.fromRGB(40,40,40)
-	avatarImg.Parent = frame
-	Instance.new("UICorner", avatarImg).CornerRadius = UDim.new(1, 0)
+	local av = Instance.new("ImageLabel")
+	av.Size = UDim2.new(0, 40, 0, 40)
+	av.Position = UDim2.new(0, 5, 0.5, 0)
+	av.AnchorPoint = Vector2.new(0, 0.5)
+	av.BackgroundTransparency = 1
+	av.Parent = frame
+	Instance.new("UICorner", av).CornerRadius = UDim.new(1, 0)
+	task.spawn(function() av.Image = Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48) end)
 
-	task.spawn(function()
-		avatarImg.Image = Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
-	end)
-
-	local textLabel = Instance.new("TextLabel")
-	textLabel.Name = "InfoText"
-	textLabel.Size = UDim2.new(1, -(CARD_HEIGHT + 5), 1, 0)
-	textLabel.Position = UDim2.new(0, CARD_HEIGHT + 5, 0, 0)
-	textLabel.BackgroundTransparency = 1
-	textLabel.Font = FONT
-	textLabel.TextSize = 14
-	textLabel.TextColor3 = Color3.fromRGB(255,255,255)
-	textLabel.TextXAlignment = Enum.TextXAlignment.Left
-	textLabel.Text = p.Name .. "\nLoading..."
-	textLabel.Parent = frame
+	local info = Instance.new("TextLabel")
+	info.Name = "Info"
+	info.Size = UDim2.new(1, -55, 1, 0)
+	info.Position = UDim2.new(0, 50, 0, 0)
+	info.BackgroundTransparency = 1
+	info.Font = FONT
+	info.TextSize = 14
+	info.TextColor3 = Color3.fromRGB(255,255,255)
+	info.TextXAlignment = Enum.TextXAlignment.Left
+	info.Parent = frame
 	
-	Instance.new("UIStroke", textLabel).Thickness = 1
+	Instance.new("UIStroke", info).Thickness = 1
 	frame.Parent = listContainer
 	return frame
 end
 
-local function updatePlayerUI(p, humanoid)
-	if not playerFrames[p] then playerFrames[p] = createPlayerCard(p) end
-	if not deviceItems[p] then createDeviceLabel(p) end
-	
-	local txt = playerFrames[p]:FindFirstChild("InfoText")
-	if not humanoid then
-		txt.Text = "Menunggu Spawn...\n" .. p.Name
-		txt.TextColor3 = Color3.fromRGB(150, 150, 150)
+local function updateHealthUI(p, hum)
+	if not playerFrames[p] then playerFrames[p] = createHealthCard(p) end
+	local txt = playerFrames[p].Info
+	if not hum then
+		txt.Text = "Loading...\n" .. p.Name
 		return
 	end
+
+	local hp = math.floor(hum.Health + 0.5)
+	local mx = math.max(1, math.floor(hum.MaxHealth + 0.5))
 	
-	local cur = math.floor(humanoid.Health + 0.5)
-	local mx = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
-	cur = clamp(cur, 0, mx)
-	
-	if cur <= 0 then
-		txt.Text = "Darah: 0 / " .. mx .. "\n" .. p.Name .. " (Mati)"
+	if hp <= 0 then
+		txt.Text = "0 / " .. mx .. "\n" .. p.Name .. " (MATI)"
 		txt.TextColor3 = Color3.fromRGB(255, 60, 60)
-		showDeathNotification(p)
+		showDeath(p)
 	else
 		isDeadState[p] = false
-		local status = (cur <= SEKARAT_THRESHOLD) and " (SEKARAT)" or ""
-		txt.Text = string.format("Darah: %d / %d%s\n%s", cur, mx, status, p.Name)
-		
-		local pct = cur / mx
-		if pct > 0.6 then txt.TextColor3 = Color3.fromRGB(170, 255, 170)
-		elseif pct > 0.25 then txt.TextColor3 = Color3.fromRGB(255, 220, 110)
-		else txt.TextColor3 = Color3.fromRGB(255, 110, 110) end
+		txt.Text = string.format("%d / %d%s\n%s", hp, mx, (hp <= SEKARAT_THRESHOLD and " !" or ""), p.Name)
+		local pct = hp/mx
+		txt.TextColor3 = (pct > 0.6 and Color3.fromRGB(170, 255, 170)) or (pct > 0.25 and Color3.fromRGB(255, 220, 110)) or Color3.fromRGB(255, 110, 110)
 	end
 end
 
-local function updateDeviceList()
-	local totalPlayers = 0
-	for p, item in pairs(deviceItems) do
-		totalPlayers = totalPlayers + 1
-		local deviceName, deviceColor
-		
-		if p == LocalPlayer then
-			deviceName, deviceColor = getMyDevice()
-		else
-			-- Placeholder karena LocalScript gak bisa cek alat orang lain
-			-- Kita tebak aja PC dulu (Biru muda)
-			deviceName = "PC"
-			deviceColor = Color3.fromRGB(85, 255, 255)
-		end
+local function refreshDetector()
+	local count = 0
+	for p, item in pairs(detectorItems) do
+		count = count + 1
+		local deviceName, deviceColor = getDeviceType(p)
 		
 		item.Label.Text = p.Name .. "\n[" .. deviceName .. "]"
 		item.Label.TextColor3 = deviceColor
 	end
-	deviceContainer.Size = UDim2.new(0, 340, 0, math.max(40, math.ceil(totalPlayers / 2) * 40 + 10))
+	detectorContainer.Size = UDim2.new(0, 340, 0, math.max(45, math.ceil(count / 2) * 45 + 10))
 end
 
--- ================= INPUT & CONNECTIONS =================
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.P then
-		deviceContainer.Visible = true
-		updateDeviceList()
+-- ================= CONNECTIONS =================
+UserInputService.InputBegan:Connect(function(i, g)
+	if g then return end
+	if i.KeyCode == Enum.KeyCode.P then
+		for _, p in ipairs(Players:GetPlayers()) do if not detectorItems[p] then createDetectorItem(p) end end
+		detectorContainer.Visible = true
+		refreshDetector()
 	end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.KeyCode == Enum.KeyCode.P then
-		deviceContainer.Visible = false
-	end
+UserInputService.InputEnded:Connect(function(i)
+	if i.KeyCode == Enum.KeyCode.P then detectorContainer.Visible = false end
 end)
 
-local function attachToPlayer(p)
-	if conns[p] then for _, c in pairs(conns[p]) do c:Disconnect() end end
-
-	local function onCharacter(char)
-		local humanoid = char:FindFirstChildWhichIsA("Humanoid") or char:WaitForChild("Humanoid", 5)
-		if not humanoid then return end
-		updatePlayerUI(p, humanoid)
-		local hConn = humanoid.HealthChanged:Connect(function() updatePlayerUI(p, humanoid) end)
-		local aConn = char.AncestryChanged:Connect(function(_, parent) if not parent then updatePlayerUI(p, nil) end end)
-		conns[p] = { healthConn = hConn, ancestryConn = aConn }
+local function setup(p)
+	p.CharacterAdded:Connect(function(c)
+		local h = c:WaitForChild("Humanoid")
+		h.HealthChanged:Connect(function() updateHealthUI(p, h) end)
+		updateHealthUI(p, h)
+	end)
+	if p.Character then 
+		local h = p.Character:FindFirstChild("Humanoid")
+		if h then updateHealthUI(p, h) end
 	end
-
-	if p.Character then onCharacter(p.Character) end
-	local charConn = p.CharacterAdded:Connect(onCharacter)
-	if not conns[p] then conns[p] = {} end
-	conns[p].charAddedConn = charConn
 end
 
-local function detachPlayer(p)
+for _, p in ipairs(Players:GetPlayers()) do setup(p) end
+Players.PlayerAdded:Connect(setup)
+Players.PlayerRemoving:Connect(function(p)
 	if playerFrames[p] then playerFrames[p]:Destroy() playerFrames[p] = nil end
-	if deviceItems[p] then deviceItems[p].Frame:Destroy() deviceItems[p] = nil end
-	if conns[p] then for _, c in pairs(conns[p]) do c:Disconnect() end conns[p] = nil end
-	isDeadState[p] = nil
-end
-
-for _, p in ipairs(Players:GetPlayers()) do attachToPlayer(p) end
-Players.PlayerAdded:Connect(attachToPlayer)
-Players.PlayerRemoving:Connect(detachPlayer)
+	if detectorItems[p] then detectorItems[p].Frame:Destroy() detectorItems[p] = nil end
+end)
