@@ -1,147 +1,331 @@
--- TeammateHealthUI.lua
--- Letakkan sebagai LocalScript di StarterPlayer > StarterPlayerScripts
--- Menerima update dari RemoteEvent "TeamHealthUpdate" dan menampilkan teks sederhana.
--- Menampilkan "SEKARAT" saat HP <= ambang.
+-- ClientTeamAndSelfHealth.lua
+-- LocalScript -> letakkan di StarterPlayer > StarterPlayerScripts
+-- Menampilkan darah pemain lokal (kiri-bawah) dan daftar darah rekan tim (kiri-atas).
+-- Gunakan hanya di game yang kamu kembangkan / kamu diberi izin.
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
 
-local player = Players.LocalPlayer
-local REMOTE_NAME = "TeamHealthUpdate"
-local remote = ReplicatedStorage:WaitForChild(REMOTE_NAME)
-
--- UI config
-local PADDING_X = 10
-local PADDING_Y = 10
-local LABEL_WIDTH = 220
-local LABEL_HEIGHT = 28
+-- CONFIG
+local SEKARAT_THRESHOLD = 16   -- <= ini dianggap sekarat
+local SELF_PADDING = Vector2.new(12, 12)    -- kiri-bawah offset
+local TEAM_PADDING = Vector2.new(12, 12)    -- kiri-atas offset
+local TEAM_LABEL_WIDTH = 250
+local TEAM_LABEL_HEIGHT = 28
+local SELF_LABEL_WIDTH = 260
+local SELF_LABEL_HEIGHT = 44
 local FONT = Enum.Font.SourceSansBold
-local FONT_SIZE = 18
-local SEKARAT_THRESHOLD = 16
+local SELF_FONT_SIZE = 22
+local TEAM_FONT_SIZE = 18
 
--- Container UI (top-left list)
-local function createUI()
-    local playerGui = player:WaitForChild("PlayerGui")
-    local screenGui = playerGui:FindFirstChild("TeammateHealthUI")
-    if not screenGui then
-        screenGui = Instance.new("ScreenGui")
-        screenGui.Name = "TeammateHealthUI"
-        screenGui.ResetOnSpawn = false
-        screenGui.Parent = playerGui
+-- UTIL
+local function clamp(v, a, b) if v < a then return a end if v > b then return b end return v end
+
+-- Create PlayerGui containers
+local function createOrGetScreenGui(name)
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local gui = playerGui:FindFirstChild(name)
+    if not gui then
+        gui = Instance.new("ScreenGui")
+        gui.Name = name
+        gui.ResetOnSpawn = false
+        gui.Parent = playerGui
     end
-
-    local frame = screenGui:FindFirstChild("ListFrame")
-    if not frame then
-        frame = Instance.new("Frame")
-        frame.Name = "ListFrame"
-        frame.Parent = screenGui
-        frame.AnchorPoint = Vector2.new(0, 0) -- top-left
-        frame.Position = UDim2.new(0, PADDING_X, 0, PADDING_Y)
-        frame.Size = UDim2.new(0, LABEL_WIDTH, 0, 300)
-        frame.BackgroundTransparency = 1
-    end
-
-    return screenGui, frame
+    return gui
 end
 
-local screenGui, frame = createUI()
+-- SELF UI (bottom-left)
+local selfGui = createOrGetScreenGui("LocalSelfHealthUI")
+local selfLabel = selfGui:FindFirstChild("SelfHealthLabel")
+if not selfLabel then
+    selfLabel = Instance.new("TextLabel")
+    selfLabel.Name = "SelfHealthLabel"
+    selfLabel.Parent = selfGui
+    selfLabel.AnchorPoint = Vector2.new(0, 1) -- bottom-left
+    selfLabel.Position = UDim2.new(0, SELF_PADDING.X, 1, -SELF_PADDING.Y)
+    selfLabel.Size = UDim2.new(0, SELF_LABEL_WIDTH, 0, SELF_LABEL_HEIGHT)
+    selfLabel.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+    selfLabel.BackgroundTransparency = 0.35
+    selfLabel.BorderSizePixel = 0
+    selfLabel.Font = FONT
+    selfLabel.TextSize = SELF_FONT_SIZE
+    selfLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    selfLabel.TextXAlignment = Enum.TextXAlignment.Left
+    selfLabel.TextYAlignment = Enum.TextYAlignment.Center
 
--- Keep labels by userId
-local labels = {}
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(0,0,0)
+    stroke.Parent = selfLabel
+end
 
-local function makeLabelFor(userId, displayName)
+-- TEAM UI (top-left list)
+local teamGui = createOrGetScreenGui("LocalTeamHealthUI")
+local listFrame = teamGui:FindFirstChild("TeamListFrame")
+if not listFrame then
+    listFrame = Instance.new("Frame")
+    listFrame.Name = "TeamListFrame"
+    listFrame.Parent = teamGui
+    listFrame.AnchorPoint = Vector2.new(0, 0) -- top-left
+    listFrame.Position = UDim2.new(0, TEAM_PADDING.X, 0, TEAM_PADDING.Y)
+    listFrame.Size = UDim2.new(0, TEAM_LABEL_WIDTH, 0, 200)
+    listFrame.BackgroundTransparency = 1
+end
+
+-- Track connections and labels per player
+local playerConns = {}  -- [player] = { healthConn = ..., maxConn = ..., charAncestryConn = ... }
+local labels = {}       -- [player] = TextLabel
+
+local function makeTeamLabelFor(player)
     local lbl = Instance.new("TextLabel")
-    lbl.Name = "HP_" .. tostring(userId)
-    lbl.Parent = frame
-    lbl.Size = UDim2.new(1, 0, 0, LABEL_HEIGHT)
-    lbl.BackgroundTransparency = 0.4
+    lbl.Name = "HP_" .. tostring(player.UserId)
+    lbl.Parent = listFrame
+    lbl.Size = UDim2.new(1, 0, 0, TEAM_LABEL_HEIGHT)
     lbl.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    lbl.BackgroundTransparency = 0.4
     lbl.BorderSizePixel = 0
     lbl.Font = FONT
-    lbl.TextSize = FONT_SIZE
+    lbl.TextSize = TEAM_FONT_SIZE
     lbl.TextColor3 = Color3.fromRGB(255,255,255)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Center
-    lbl.Text = displayName .. ": -- / --"
+    lbl.Text = player.Name .. ": -- / --"
     return lbl
 end
 
 local function updateLayout()
-    -- stack labels vertically
     local idx = 0
-    for _, lbl in pairs(labels) do
-        lbl.Position = UDim2.new(0, 0, 0, idx * LABEL_HEIGHT)
-        idx = idx + 1
+    for _, p in pairs(Players:GetPlayers()) do
+        if labels[p] then
+            labels[p].Position = UDim2.new(0, 0, 0, idx * TEAM_LABEL_HEIGHT)
+            idx = idx + 1
+        end
     end
-    -- adjust frame height
-    frame.Size = UDim2.new(0, LABEL_WIDTH, 0, math.max(1, idx) * LABEL_HEIGHT)
+    listFrame.Size = UDim2.new(0, TEAM_LABEL_WIDTH, 0, math.max(1, idx) * TEAM_LABEL_HEIGHT)
 end
 
-local function removeLabel(userId)
-    local lbl = labels[userId]
-    if lbl then
-        lbl:Destroy()
-        labels[userId] = nil
-        updateLayout()
+local function removePlayerUI(p)
+    if labels[p] then
+        labels[p]:Destroy()
+        labels[p] = nil
     end
+    -- disconnect any connections
+    local c = playerConns[p]
+    if c then
+        if c.healthConn then c.healthConn:Disconnect() end
+        if c.maxConn then c.maxConn:Disconnect() end
+        if c.ancestryConn then c.ancestryConn:Disconnect() end
+        playerConns[p] = nil
+    end
+    updateLayout()
 end
 
-local function setLabel(userId, name, current, max, left)
-    if left then
-        removeLabel(userId)
+-- Decide whether to show this other player: same team as local player (and not local player in team list)
+local function shouldShowAsTeammate(other)
+    if not other then return false end
+    -- If both have Team objects set, compare. If nil, you can adapt to your game's team logic.
+    if LocalPlayer.Team and other.Team then
+        return LocalPlayer.Team == other.Team and other ~= LocalPlayer
+    end
+    -- fallback: if game doesn't use Teams service, you can insert custom logic here.
+    return false
+end
+
+local function getHumanoidFromCharacter(character)
+    if not character then return nil end
+    return character:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function updateSelfDisplay(humanoid)
+    if not humanoid then
+        selfLabel.Text = "Darah: -- / --"
         return
     end
-
-    local lbl = labels[userId]
-    if not lbl then
-        lbl = makeLabelFor(userId, name)
-        labels[userId] = lbl
-    end
-
-    -- Guard: avoid showing local player's own HP here if you prefer
-    if userId == player.UserId then
-        -- optional: skip showing self in teammate list
-        removeLabel(userId)
-        return
-    end
-
-    local cur = math.floor(current + 0.5)
-    local m = math.max(1, math.floor(max + 0.5))
-    cur = math.clamp(cur, 0, m)
-
+    local cur = math.floor(humanoid.Health + 0.5)
+    local max = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
     local status = ""
-    if cur <= SEKARAT_THRESHOLD then
-        status = " — SEKARAT"
+    if cur <= SEKARAT_THRESHOLD then status = " — SEKARAT" end
+    selfLabel.Text = string.format("Darah: %d / %d%s", clamp(cur,0,max), max, status)
+
+    local pct = cur / max
+    if pct > 0.6 then
+        selfLabel.TextColor3 = Color3.fromRGB(170,255,170)
+    elseif pct > 0.25 then
+        selfLabel.TextColor3 = Color3.fromRGB(255,220,110)
+    else
+        selfLabel.TextColor3 = Color3.fromRGB(255,110,110)
+    end
+end
+
+local function updateTeammateLabel(player, humanoid)
+    if not labels[player] then
+        labels[player] = makeTeamLabelFor(player)
+    end
+    local lbl = labels[player]
+    if not humanoid then
+        lbl.Text = string.format("%s: -- / --", player.Name)
+        lbl.TextColor3 = Color3.fromRGB(200,200,200)
+        updateLayout()
+        return
     end
 
-    lbl.Text = string.format("%s: %d / %d%s", name, cur, m, status)
+    local cur = math.floor(humanoid.Health + 0.5)
+    local max = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
+    local status = ""
+    if cur <= SEKARAT_THRESHOLD then status = " — SEKARAT" end
+    lbl.Text = string.format("%s: %d / %d%s", player.Name, clamp(cur,0,max), max, status)
 
-    -- color coding by pct
-    local pct = (m > 0) and (cur / m) or 0
+    local pct = cur / max
     if pct > 0.6 then
-        lbl.TextColor3 = Color3.fromRGB(160,255,160)
+        lbl.TextColor3 = Color3.fromRGB(170,255,170)
     elseif pct > 0.25 then
-        lbl.TextColor3 = Color3.fromRGB(255,210,110)
+        lbl.TextColor3 = Color3.fromRGB(255,220,110)
     else
-        lbl.TextColor3 = Color3.fromRGB(255,120,120)
+        lbl.TextColor3 = Color3.fromRGB(255,110,110)
     end
 
     updateLayout()
 end
 
--- Receive updates from server
-remote.OnClientEvent:Connect(function(data)
-    -- data = { userId = number, name = string, current = number, max = number, left = bool (optional) }
-    if not data or not data.userId then return end
+-- Attach to a player's character humanoid (for reading health)
+local function attachToPlayerCharacter(player)
+    -- cleanup if existed
+    if playerConns[player] then
+        if playerConns[player].healthConn then playerConns[player].healthConn:Disconnect() end
+        if playerConns[player].maxConn then playerConns[player].maxConn:Disconnect() end
+        if playerConns[player].ancestryConn then playerConns[player].ancestryConn:Disconnect() end
+    end
 
-    -- Only show teammates because server only sends to teammates
-    setLabel(data.userId, data.name or "Player", data.current or 0, data.max or 0, data.left)
+    local character = player.Character
+    if not character then
+        -- listen for character spawn
+        local ancestryConn
+        ancestryConn = player.CharacterAdded:Connect(function(char)
+            if playerConns[player] and playerConns[player].ancestryConn then
+                playerConns[player].ancestryConn:Disconnect()
+            end
+            attachToPlayerCharacter(player)
+        end)
+        playerConns[player] = { ancestryConn = ancestryConn }
+        return
+    end
+
+    local humanoid = getHumanoidFromCharacter(character)
+    if not humanoid then
+        -- wait a bit
+        humanoid = character:WaitForChild("Humanoid", 5)
+        if not humanoid then
+            -- can't find humanoid; give up for now
+            return
+        end
+    end
+
+    -- update initial
+    if player == LocalPlayer then
+        updateSelfDisplay(humanoid)
+    end
+    if shouldShowAsTeammate(player) then
+        updateTeammateLabel(player, humanoid)
+    else
+        -- if previously had label for this player, remove it
+        if labels[player] then removePlayerUI(player) end
+    end
+
+    -- connect events
+    local healthConn = humanoid.HealthChanged:Connect(function()
+        if player == LocalPlayer then
+            updateSelfDisplay(humanoid)
+        end
+        if shouldShowAsTeammate(player) then
+            updateTeammateLabel(player, humanoid)
+        end
+    end)
+    local maxConn = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function()
+        if player == LocalPlayer then
+            updateSelfDisplay(humanoid)
+        end
+        if shouldShowAsTeammate(player) then
+            updateTeammateLabel(player, humanoid)
+        end
+    end)
+
+    -- detect character removal to cleanup later
+    local ancestryConn
+    ancestryConn = character.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            -- character removed
+            if player == LocalPlayer then
+                selfLabel.Text = "Darah: -- / --"
+            end
+            if labels[player] then
+                labels[player]:Destroy()
+                labels[player] = nil
+            end
+            if playerConns[player] then
+                if playerConns[player].healthConn then playerConns[player].healthConn:Disconnect() end
+                if playerConns[player].maxConn then playerConns[player].maxConn:Disconnect() end
+                if playerConns[player].ancestryConn then playerConns[player].ancestryConn:Disconnect() end
+                playerConns[player] = nil
+            end
+            updateLayout()
+        end
+    end)
+
+    playerConns[player] = {
+        healthConn = healthConn;
+        maxConn = maxConn;
+        ancestryConn = ancestryConn;
+    }
+end
+
+-- Re-evaluate teammates when local player's team changes
+local function refreshAllTeamDisplays()
+    -- remove labels for players who are no longer teammates
+    for p, _ in pairs(labels) do
+        if not shouldShowAsTeammate(p) then
+            removePlayerUI(p)
+        end
+    end
+    -- attach to players who are teammates and not yet tracked
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and shouldShowAsTeammate(p) then
+            attachToPlayerCharacter(p)
+        end
+    end
+    -- ensure local player's humanoid tracked
+    attachToPlayerCharacter(LocalPlayer)
+end
+
+-- Player join / leave handlers
+Players.PlayerAdded:Connect(function(p)
+    -- track for team changes and character spawns
+    p:GetPropertyChangedSignal("Team"):Connect(function()
+        -- if this player's team changed, update displays appropriately
+        refreshAllTeamDisplays()
+    end)
+    -- attach if teammate
+    attachToPlayerCharacter(p)
 end)
 
--- Cleanup when players leave
-Players.PlayerRemoving:Connect(function(leaving)
-    removeLabel(leaving.UserId)
+Players.PlayerRemoving:Connect(function(p)
+    removePlayerUI(p)
 end)
 
--- Optionally: request initial snapshot from server (not implemented here).
--- You can extend server to FireClient with initial states on player join.
+-- Local player team or team change handling
+LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+    refreshAllTeamDisplays()
+end)
+
+-- Initial setup for existing players
+for _, p in ipairs(Players:GetPlayers()) do
+    -- connect team property change on other players as well
+    p:GetPropertyChangedSignal("Team"):Connect(function()
+        refreshAllTeamDisplays()
+    end)
+    attachToPlayerCharacter(p)
+end
+
+-- Ensure local player's label updates on respawn
+LocalPlayer.CharacterAdded:Connect(function(char)
+    attachToPlayerCharacter(LocalPlayer)
+end)
